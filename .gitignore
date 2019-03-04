@@ -1,0 +1,13 @@
+*.pyc
+*.DS_Store
+*.hdf5
+*.png
+*.tiff
+*.so
+*.dylib
+*.config
+tifffile.py
+removed/*
+tiff/*
+for_web/*
+projects/*
