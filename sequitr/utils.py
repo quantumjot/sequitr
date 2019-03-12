@@ -82,6 +82,26 @@ def as_tf_session(**tf_session_kwargs):
 
 
 
+def get_tfrecord_stats(filename):
+    """ Get some basic details about a TFRecordDataset from the file
+
+    Assumes a basic stucture of:
+        train/
+            image/
+                image/
+                width/
+                height/
+                channels/
+
+        test/
+
+    """
+    for x in tf.python_io.tf_record_iterator(filename):
+        pass
+
+
+
+
 def filter_doubling(start_filters=8,
                     num_layers=7,
                     max_filters=4096,

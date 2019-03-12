@@ -420,15 +420,6 @@ def tr_augment(features, params):
 
 
 
-# def init_new_variables(session, variables=None):
-#     """ Initialize only new variables """
-#     all_vars = tf.global_variables() + tf.local_variables()
-#     get_var = {v.op.name: v for v in all_vars}
-#     uninit_var_names = session.run(tf.report_uninitialized_variables(variables))
-#     uninit_vars = [get_var[v] for v in uninit_var_names]
-#     init_op = tf.variables_initializer(uninit_vars)
-#     session.run(init_op)
-
 
 
 
@@ -516,7 +507,6 @@ class GenerativeAdverserialNetwork(object):
 
         self.__discriminator_fn = discriminator_fn
         self.__generator_fn = generator_fn
-        self.saver = None
 
         # NOTE(arl): this is a hang-over from the Estimator config interface
         self.__num_channels = params.get('num_outputs', 2)
@@ -528,12 +518,14 @@ class GenerativeAdverserialNetwork(object):
         self.training_data_filename = params.get('training_data', None)
         self.learning_rate = params.get('learning_rate', 1e-3)
 
-        # get the number of entries in the tf_record_file
-        n = len([x for x in tf.python_io.tf_record_iterator(self.training_data_filename)])
-        self.num_batches_per_epoch = int(n/self.batch_size)
+        if mode == tf.estimator.ModeKeys.TRAIN:
+            # get the number of entries in the tf_record_file
+            n = len([x for x in tf.python_io.tf_record_iterator(self.training_data_filename)])
+            self.num_batches_per_epoch = int(n/self.batch_size)
 
-        # set up the dataset
-        self.dataset = tr_input_fn(self.training_data_filename, None, self.batch_size)
+            # set up the dataset
+            self.dataset = tr_input_fn(self.training_data_filename, None, self.batch_size)
+
 
         # somewhere to store the networks
         self.networks = []
@@ -565,12 +557,6 @@ class GenerativeAdverserialNetwork(object):
     def num_iterations_this_level(self):
         """ return the number of iteration for this expansion """
         return self.num_epochs_per_level*self.num_batches_per_epoch
-        # return 48 * (20*2**self.expansion_iteration)
-
-    # @property
-    # def layer_shapes(self):
-    #     """ return the final output size of the image """
-    #     return [(self.start_size[0]*(2**l), self.start_size[1]*(2**l)) for l in range(self.num_levels+1)]
 
     def get_size(self, level):
         return tuple([s*(2**level) for s in self.start_size])
@@ -604,13 +590,11 @@ class GenerativeAdverserialNetwork(object):
 
     def get_training_variables(self, current_layer):
         """ return the training variables for the whole GAN """
-        # # set up the optimizers to update their respective vars
+        # set up the optimizers to update their respective vars
         d_vars = self.discriminator_training_variables(current_layer)
         g_vars = self.generator_training_variables(current_layer)
         d_input_vars = tf.trainable_variables(scope='GAN/discriminator/from_image/from_image{0:d}'.format(current_layer))
         g_output_vars = tf.trainable_variables(scope='GAN/generator/to_image/to_image{0:d}'.format(current_layer))
-        # if current_layer > 0:
-        #     g_output_vars += tf.trainable_variables(scope='GAN/generator/output/to_image{0:d}'.format(current_layer-1))
         d_vars += d_input_vars
         g_vars += g_output_vars
         print current_layer, " --> D_VARS:", d_vars
@@ -637,7 +621,7 @@ class GenerativeAdverserialNetwork(object):
 
 
 
-    def build(self, model):
+    def build(self):
         """ build the network(s) and placeholders """
         self._build_placeholders()
         self._build_networks()
@@ -656,7 +640,7 @@ class GenerativeAdverserialNetwork(object):
 
 
 
-    def _build_networks(self, levels_to_build):
+    def _build_networks(self):
         """ build all of the networks in one go """
 
         # set up the optimizers
@@ -771,17 +755,9 @@ class GenerativeAdverserialNetwork(object):
 
         return d_opt, g_opt
 
-        # l = self.current_level
-        #
-        # # set up AdamOptimizer for the discriminator and generator
-        # d_vars, g_vars = self.get_training_variables(l)
-        # d_solver = d_opt.minimize(d_loss, var_list=d_vars)
-        # g_solver = g_opt.minimize(g_loss, var_list=g_vars, global_step=global_step)
-        #
-
-
 
     def _build_summaries(self, d_loss, g_loss, Gz, level=0):
+        """ build summaries for this output layer """
         # set up an image summary of the output (use green, magenta)
         layer_id = "{0}x{1}".format(*self.get_size(level))
         tf.summary.image("Gz_"+layer_id, tf.concat([Gz[...,1:2],
@@ -794,6 +770,7 @@ class GenerativeAdverserialNetwork(object):
 
 
     def build_latent(self):
+        """ latent generator """
         # build the latent vector generator
         with tf.variable_scope('latent_random_normal'):
             Z_ = tf.random.normal((self.batch_size, 1, 1, 512),
@@ -805,13 +782,13 @@ class GenerativeAdverserialNetwork(object):
 
         return Z_
 
-    def checkpoint(self, sess):
+    def restore(self, session, filename):
         pass
 
     # @utils.as_tf_session(config=tf.ConfigProto(log_device_placement=True))
     @utils.as_tf_session()
     def train(self, session=None):
-        """ Do the training in a session. """
+        """ Train the model. """
 
         if not self.initialized:
             raise Exception("Networks have not been initialized. Please run .build()")
@@ -823,7 +800,7 @@ class GenerativeAdverserialNetwork(object):
         # set up a file writer with most of the graph...
         utils.check_and_makedir(self.output_dir)
         writer = tf.summary.FileWriter(self.output_dir)
-        saver = tf.train.Saver()
+
 
         # save out the graph and merge summaries
         writer.add_graph(session.graph, global_step=0)
@@ -837,13 +814,18 @@ class GenerativeAdverserialNetwork(object):
         session.run(self.dataset.initializer)
         session.run(tf.global_variables_initializer())
 
+        # iterate over each network
         for n, network in enumerate(self.networks):
 
-            # unzip it
+            # unzip network outputs
             Gz, d_loss, g_loss, d_solver, g_solver = network
             self._build_summaries(d_loss, g_loss, Gz, n)
             summaries = tf.summary.merge_all()
 
+            # iterate over the fading-in phase and the stabilisation phase
+            # fade-in linearly mixes an upscaled previous layer with the
+            #   current layer, to prevent shock of adding a new layer
+            # stabilisation phase is purely training on the current layer
             for phase in ('fade', 'stabilisation'):
                 for step in range(self.num_iterations_this_level):
 
@@ -863,8 +845,8 @@ class GenerativeAdverserialNetwork(object):
                         session.run(d_solver, feed_dict=feed)
                         session.run(g_solver, feed_dict=feed)
 
+                    # some feedback to stdout and update TensorBoard summaries
                     print gs(), phase, self.get_size(n), fade
-
                     if gs() % (100*self.repeat_batch) == 0:
                         print gs(), "Updating summaries..."
                         # get the summaries...
@@ -874,16 +856,62 @@ class GenerativeAdverserialNetwork(object):
 
             # save out the model
             print gs(), "Checkpoint..."
-            model_fn = "model_{0:s}.ckpt".format(str(self.current_size).replace(', ','x'))
+            sz_fn = str(self.get_size(n)).replace(', ','x')
+            model_fn = "model_{0:s}.ckpt".format()
             saver.save(session, os.path.join(self.output_dir, model_fn))
 
         writer.close()
         saver.close()
 
-    @utils.as_tf_session()
-    def predict(self, session=None, Z):
+        # at the end of training, create a model
+
+
+
+
+
+    @utils.as_tf_session(graph=tf.Graph())
+    def predict(self, session=None):
         """ given some latent vector Z, generate some images. """
-        pass
+
+        export_dir = os.path.join(self.output_dir,'export')
+        model = tf.saved_model.loader.load(session, [tf.saved_model.tag_constants.SERVING], export_dir)
+
+        sig = tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
+        z = model.signature_def[sig].inputs['Z'].name
+        a = model.signature_def[sig].inputs['alpha'].name
+        Gz = model.signature_def[sig].outputs['Gz'].name
+
+        output = session.run(Gz, {z: latent, a: 1.0})
+        return output
+
+
+    def convert_checkpoint_to_model(self):
+        """ convert a checkpoint to a model to be used for inference """
+
+        # build the network
+        self.build()
+        saver = tf.train.Saver()
+
+        # pick a particular level
+        level=5
+        filename = os.path.join(self.output_dir, "model_(1024x1024).ckpt")
+        export_dir = os.path.join(self.output_dir,'export')
+
+        @utils.as_tf_session()
+        def convert_to_model(session=None):
+            saver.restore(session, filename)
+
+
+            # get the output of the generator from the specified level
+            Gz, _, _, _, _, = self.networks[level]
+
+            tf.saved_model.simple_save(session,
+                                       export_dir,
+                                       inputs={"Z": self.Z,
+                                               "alpha": self.alpha},
+                                       outputs={"Gz": Gz})
+
+        convert_to_model()
 
 
 
@@ -914,7 +942,6 @@ def create_GAN_dataset(filename, src_pth, dirs, channels):
         src.append([s for s in channel_files])
 
     print src
-
     create_GAN_tfrecord(src, filename, n_samples=256)
 
 def create_GAN_tfrecord(src,
@@ -1023,8 +1050,8 @@ if __name__ == "__main__":
                     help='Specify the number of expansions from (4,4) start')
     p.add_argument('--batch_size', type=int, default=32,
                     help='Specify the batch size')
-    # p.add_argument('--use_GP', action='store_true',
-    #                 help='Use gradient penalty rather than Lipschitz.')
+    p.add_argument('--train', action='store_true',
+                    help='Train the model if this flag is present')
 
     args = p.parse_args()
     print args
@@ -1047,14 +1074,23 @@ if __name__ == "__main__":
             return max([int(r.lstrip('GAN')) for r in runs])+1
 
 
-    output_dir = os.path.join(outdir,"GAN{0:d}".format(get_next_run_number(outdir)))
-    print output_dir
 
+
+
+
+    # if we're training the GAN...
+    if args.train:
+        # set up the GAN
+        mode = tf.estimator.ModeKeys.TRAIN
+        gan = GenerativeAdverserialNetwork(config.to_params(), mode)
+        output_dir = os.path.join(outdir,"GAN{0:d}".format(get_next_run_number(outdir)))
+        gan.output_dir = output_dir
+        gan.build()
+        gan.train()
 
     # set up the GAN
-    mode = tf.estimator.ModeKeys.TRAIN
+    mode = tf.estimator.ModeKeys.PREDICT
     gan = GenerativeAdverserialNetwork(config.to_params(), mode)
-    gan.output_dir = output_dir
-
-    gan.build()
-    gan.train()
+    gan.output_dir = "/Users/arl/Documents/GAN"
+    # gan.convert_checkpoint_to_model()
+    gan.predict()
