@@ -16,6 +16,7 @@
 # Created:  23/03/2019
 #-------------------------------------------------------------------------------
 
+import re
 import os
 import numpy as np
 import tensorflow as tf
@@ -30,12 +31,9 @@ from dataio import tifffile as t
 MODELDIR = "/home/alan/documents/training_data/competition_GAN"
 
 # switch the backend for headless server
-plt.switch_backend('agg')
+# plt.switch_backend('agg')
 
 
-# convenience definitions to prevent spelling errors when naming layers...
-D_NET = 'discriminator'
-G_NET = 'generator'
 
 
 
@@ -52,7 +50,386 @@ def pixel_norm(x, epsilon=1e-8):
     """ pixelnorm replacement for batch normalization as used in ProGAN """
     return x * tf.rsqrt(tf.reduce_mean(tf.square(x), axis=1, keepdims=True) + epsilon)
 
-k_init = tf.contrib.layers.xavier_initializer(uniform=False)
+
+
+k_init = tf.initializers.random_normal
+b_init = tf.constant_initializer(0.)
+
+
+
+
+def weighted_conv2d(inputs=None,
+                    filters=None,
+                    kernel_size=[3, 3],
+                    padding="same",
+                    activation=tf.nn.leaky_relu,
+                    name='conv',
+                    reuse=tf.AUTO_REUSE,
+                    norm=True):
+    """ perform a weighted initialization of a 2d convolution """
+
+    with tf.variable_scope(name, reuse=reuse):
+
+        # e.g. [3,3,2,64]
+        k_shape = kernel_size + [inputs.shape[-1], filters]
+        k_shape_prod = float(kernel_size[0]*kernel_size[1]*filters)
+
+        # perform weighting of the kernels byt the size of the layer [3,3,2]
+        kernels = tf.get_variable('filter', k_shape, initializer=k_init)
+        w_kernels = tf.scalar_mul(tf.sqrt(2.0/k_shape_prod), kernels)
+
+        # bias
+        bias = tf.get_variable('bias', [1, 1, 1, filters], initializer=b_init)
+
+        # do the convolution and add the bias
+        output = tf.nn.conv2d(inputs,
+                              w_kernels,
+                              [1, 1, 1, 1],
+                              padding=padding.upper(),
+                              data_format='NHWC') + bias
+
+        # now the activation function
+        if activation:
+            output = activation(output)
+
+        # we can also do the pixel normalization here
+        if norm:
+            output = pixel_norm(output)
+
+        return output
+
+
+def to_image(X, filters=2, n=None):
+    """ 1x1 convolution layer to convert output to an image """
+    output = weighted_conv2d(inputs=X,
+                             filters=filters,
+                             kernel_size=[1, 1],
+                             activation=None, #tf.nn.tanh,
+                             padding="same",
+                             name='to_image{}'.format(n),
+                             reuse=tf.AUTO_REUSE,
+                             norm=False)
+
+    return output
+
+def from_image(X, filters=2, n=None):
+    """ 1x1 convolution layer to convert image to an input """
+    output = weighted_conv2d(inputs=X,
+                             filters=filters,
+                             kernel_size=[1, 1],
+                             activation=k_leaky_relu_alpha,
+                             padding="same",
+                             name='from_image{}'.format(n),
+                             reuse=tf.AUTO_REUSE,
+                             norm=True)
+    return output
+
+
+def half_size(X):
+    """ half the size of an image """
+    new_shape = tf.shape(X)[1:3] / 2
+    return tf.image.resize_nearest_neighbor(X, new_shape, align_corners=True)
+
+def double_size(X):
+    """ double the size of an image """
+    new_shape = tf.shape(X)[1:3] * 2
+    return tf.image.resize_nearest_neighbor(X, new_shape, align_corners=True)
+
+
+
+
+
+
+
+
+
+
+
+
+def discriminator_network(x, filters):
+    """ discriminator_network
+
+    The discriminator network is essentially a standard convolutional
+    neural network classifier. Build the full network in one shot.
+
+    Returns a 'probability' of being real.
+
+    Notes:
+         - this doesn't use a 1x1 convolution layer at the start. That
+           needs to be added separately since we may be feeding in to a
+           lower layer when training.
+    """
+
+    # store the input layers so that we can inject data at the correct scale
+    num_layers = len(filters)
+
+    # build an input here from an image
+    with tf.variable_scope("from_image", auxiliary_name_scope=True):
+        x = from_image(x, filters=filters[0], n=num_layers-1)
+        conv_layers = [x]
+
+    for l, f in enumerate(filters[1:]):
+        with tf.variable_scope("layer_{0:d}".format(num_layers-l-1)):
+            # convolutional layers
+            conv1 = weighted_conv2d(inputs=conv_layers[-1],
+                                    filters=f,
+                                    kernel_size=[3, 3],
+                                    padding="same",
+                                    activation=k_leaky_relu_alpha,
+                                    name='conv1',
+                                    reuse=tf.AUTO_REUSE,
+                                    norm=False)
+
+            conv2 = weighted_conv2d(inputs=conv1,
+                                    filters=f,
+                                    kernel_size=[3, 3],
+                                    padding="same",
+                                    activation=k_leaky_relu_alpha,
+                                    name='conv2',
+                                    reuse=tf.AUTO_REUSE,
+                                    norm=False)
+
+            # pooling Layer
+            p = tf.layers.average_pooling2d(inputs=conv2,
+                                            pool_size=[2, 2],
+                                            strides=2,
+                                            name='pool')
+
+            # make the new output, the input of the previous layer
+            conv_layers.append(p)
+
+    # input to the final layers
+    x = conv_layers[-1]
+
+    with tf.variable_scope('output'):
+        # minibatch standard deviation layer
+        # compute the stdev of each feature at each spatial position across
+        # the mini batch
+        mean, var = tf.nn.moments(x,
+                                  [0],
+                                  shift=None,
+                                  name='moments',
+                                  keep_dims=True)
+
+        var = tf.reduce_mean(var, keepdims=False)
+        stdev = tf.sqrt(var, name='minibatch_stdev')
+        minibatch_stdev = tf.ones((tf.shape(x)[0],4,4,1), tf.float32) * stdev
+
+        # convolutional layer
+        conv = weighted_conv2d(inputs=x,
+                               filters=filters[-1],
+                               kernel_size=[3, 3],
+                               padding="same",
+                               activation=k_leaky_relu_alpha,
+                               name='conv',
+                               reuse=tf.AUTO_REUSE,
+                               norm=False)
+
+        conv = tf.concat([conv, minibatch_stdev], axis=-1)
+
+        pool_flat = tf.reshape(conv, [-1, 4*4*(filters[-1]+1)]) # +1 due to minibatch std
+        dense = tf.layers.dense(inputs=pool_flat,
+                                units=filters[-1],
+                                activation=k_leaky_relu_alpha,
+                                name='dense',
+                                reuse=tf.AUTO_REUSE)
+
+        # logits Layer
+        logits = tf.layers.dense(inputs=dense,
+                                 units=1,
+                                 name='logits',
+                                 reuse=tf.AUTO_REUSE)
+
+
+    return conv_layers, tf.squeeze(logits)
+
+
+
+
+
+def generator_network(z, filters, start_shape=(4,4)):
+    """ The generator network takes a vector of random noise and generates
+    an output imageself.
+
+    Notes:
+         - this doesn't use a 1x1 convolution layer at the end. That
+           needs to be added separately since we may be extracting a
+           lower layer when training.
+    """
+
+    with tf.variable_scope('latent'):
+
+        # pop the first filter, this ensures we make the correct number of
+        # convolutional layers later on...
+
+        # calculate the number of features
+        initial_shape = start_shape+(filters[0],)
+        num_units = np.prod(initial_shape)
+
+        dense = tf.layers.dense(inputs=pixel_norm(z),
+                                units=num_units,
+                                activation=k_leaky_relu_alpha,
+                                name='dense1',
+                                reuse=tf.AUTO_REUSE)
+
+        # pixel norm and reshape to an image
+        reshaped = pixel_norm(tf.reshape(dense, (-1,)+initial_shape))
+
+        # # first convolutional layer
+        conv0 = weighted_conv2d(inputs=reshaped,
+                                 filters=filters[0],
+                                 kernel_size=[3, 3],
+                                 padding="same",
+                                 activation=k_leaky_relu_alpha,
+                                 name='conv',
+                                 reuse=tf.AUTO_REUSE,
+                                 norm=True)
+
+    # now set the value of x (the output of the previous layer)
+    conv_layers = [conv0]
+
+    # now build the layers
+    for l, f in enumerate(filters[1:]):
+        with tf.variable_scope('layer_{0:d}'.format(l)):
+
+            upscale = double_size(conv_layers[-1])
+
+            # convolutional layers
+            conv1 = weighted_conv2d(inputs=upscale,
+                                    filters=f,
+                                    kernel_size=[3, 3],
+                                    padding="same",
+                                    activation=k_leaky_relu_alpha,
+                                    name='conv1',
+                                    reuse=tf.AUTO_REUSE,
+                                    norm=True)
+
+            conv2 = weighted_conv2d(inputs=conv1,
+                                    filters=f,
+                                    kernel_size=[3, 3],
+                                    padding="same",
+                                    activation=k_leaky_relu_alpha,
+                                    name='conv2',
+                                    reuse=tf.AUTO_REUSE,
+                                    norm=True)
+
+            # convolutional layer
+            conv_layers.append(conv2)
+
+    outputs = []
+    with tf.variable_scope("to_image", auxiliary_name_scope=True):
+        for l, conv in enumerate(conv_layers):
+            output = to_image(conv, filters=2, n=l)
+            outputs.append(output)
+
+    return outputs, output
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def tr_input_fn(record_file, num_epochs=None, batch_size=1, params={}):
+    """ Take the input data path and return an iterator to the dataset """
+
+    tr_data = (tf.data.TFRecordDataset([record_file])
+                .map(lambda x:tr_input_parser(x))
+                .cache()
+                .shuffle(buffer_size=1536)
+                .map(lambda x:tr_augment(x,params), num_parallel_calls=4)
+                .batch(batch_size)
+                .repeat(num_epochs)
+                .prefetch(batch_size))
+
+    # create TensorFlow Iterator object
+    return tr_data.make_initializable_iterator()
+
+def tr_input_parser(serialized_example):
+    """ Parse input images """
+
+    # set up the fixed length features to load
+    feature = {'train/image': tf.FixedLenFeature([], tf.string),
+               'train/width': tf.FixedLenFeature([], tf.int64),
+               'train/height': tf.FixedLenFeature([], tf.int64),
+               'train/channels': tf.FixedLenFeature([], tf.int64)}
+
+    features = tf.parse_single_example(serialized_example, features=feature)
+
+    # convert the image data from string back to the numbers
+    image = tf.decode_raw(features['train/image'], tf.uint8)
+
+    # get the size of the images
+    height = tf.cast(features['train/height'], tf.int32)
+    width = tf.cast(features['train/width'], tf.int32)
+    channels = tf.cast(features['train/channels'], tf.int32)
+    image_shape = tf.stack([height, width, channels])
+
+    # reshape image data into the original shape
+    img = tf.cast(tf.reshape(image, image_shape), tf.float32)
+
+    # normalize the image
+    mean, var = tf.nn.moments(img, axes=[0,1], keep_dims=True)
+    img = tf.nn.batch_normalization(img,
+                                    mean,
+                                    var,
+                                    None, None, 1e-8,
+                                    name='dataset_image_normalization')
+
+    # need to normalise the input images to -1 to 1
+    # img = (img/127.5)-1.
+    return img
+
+def tr_augment(features, params):
+    """ Reshape, randomly crop and flip """
+
+    # random crop
+    img = tf.image.random_crop(features, (512,512,2))
+
+    # now do some random flips
+    img = tf.image.random_flip_left_right(img)
+    img = tf.image.random_flip_up_down(img)
+
+    return img
+
+
+
+
+
+
+# def init_new_variables(session, variables=None):
+#     """ Initialize only new variables """
+#     all_vars = tf.global_variables() + tf.local_variables()
+#     get_var = {v.op.name: v for v in all_vars}
+#     uninit_var_names = session.run(tf.report_uninitialized_variables(variables))
+#     uninit_vars = [get_var[v] for v in uninit_var_names]
+#     init_op = tf.variables_initializer(uninit_vars)
+#     session.run(init_op)
+
+
 
 
 
@@ -70,216 +447,475 @@ class GAN2DConfiguration(utils.NetConfiguration):
         self.name = 'GAN_competition'
         # self.dropout = 0.4
         self.batch_size = 32
+        self.repeat_batch = 4
         self.num_outputs = 2
-        self.num_expansions = 7
-        self.num_epochs_per_expansion = 500
+        self.num_levels = 7
+        self.num_epochs_per_level = 1
         self.start_size = (4,4)
         self.learning_rate = 1e-3
-        self.balance_loss = False
         self.warm_start = False
         self.path = ''
         self.training_data = 'train_GAN.tfrecord'
 
 
+class GenerativeAdverserialNetwork(object):
+    """ Generative Adverserial Network
 
-def discriminator_network(features,
-                          input_shape,
-                          num_filters=64,
-                          num_layers=0,
-                          max_num_filters=512,
-                          mode=tf.estimator.ModeKeys.TRAIN):
-    """ The discriminator network is essentially a standard convolutional
-    neural network classifier.
+    This is a GAN (based on DCGAN and ProGAN, references below) to synthesize
+    microscopy images.
 
-    Returns a 'probability' of being real.
+
+    Before training:
+        The network needs training data. Before running, use the
+        create_GAN_tfrecord function to create a serialized tfrecord of the
+        training data. This is much more efficient for dataio. See the
+        documentation for that function for how to do this.
+
+        # must set up a tfrecord file of training data
+        create_GAN_tfrecord(src, filename, n_samples=256)
+
+
+    Args:
+        params:             a dictionary of parameters from the config
+        mode:               training mode (DEPRECATED)
+        discriminator_fn:   a function that builds a discriminator network
+        generator_fn:       a function that builds a generator network
+
+    Use:
+        # set up a GAN configuration
+        config = GAN2DConfiguration()
+        config.batch_size = 32
+        config.training_data = "train_GAN.tfrecord"
+
+        # set up the GAN
+        mode = tf.estimator.ModeKeys.TRAIN
+        gan = GenerativeAdverserialNetwork(config.to_params(), mode)
+        gan.output_dir = "/mnt/lowe-sn00/JobServer/output/GAN/"
+
+        # train it
+        gan.train()
+
+
+    Notes:
+        Generative Adversarial Networks
+        Ian J. Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing Xu,
+        David Warde-Farley, Sherjil Ozair, Aaron Courville, Yoshua Bengio
+        https://arxiv.org/abs/1406.2661
+
+        Progressive Growing of GANs for Improved Quality, Stability,
+        and Variation
+        Tero Karras, Timo Aila, Samuli Laine, Jaakko Lehtinen
+        https://arxiv.org/abs/1710.10196
+
     """
+    def __init__(self,
+                 params,
+                 mode=None,
+                 discriminator_fn=discriminator_network,
+                 generator_fn=generator_network):
 
-    # use a 1x1 convolution to maker sure we always have the same number of
-    # inputs, that is larger than 2...
+        self.__discriminator_fn = discriminator_fn
+        self.__generator_fn = generator_fn
+        self.saver = None
 
-    # set up the filter doubling
-    # layers = [(l, int(min((2**(9-l), 512)))) for l in range(9)]
-    layers = [(l, num_filters) for l in range(9)]
-    layers.reverse()
+        # NOTE(arl): this is a hang-over from the Estimator config interface
+        self.__num_channels = params.get('num_outputs', 2)
+        self.batch_size = params.get('batch_size', 32)
+        self.repeat_batch = params.get('repeat_batch', 1)
+        self.num_levels = params.get('num_levels', 3)
+        self.num_epochs_per_level = params.get('num_epochs_per_level', 10)
+        self.start_size = params.get('start_size', (4,4))
+        self.training_data_filename = params.get('training_data', None)
+        self.learning_rate = params.get('learning_rate', 1e-3)
 
-    if num_layers == 0:
-        layers_to_build = []
-    else:
-        layers_to_build = layers[-num_layers:]
+        # get the number of entries in the tf_record_file
+        n = len([x for x in tf.python_io.tf_record_iterator(self.training_data_filename)])
+        self.num_batches_per_epoch = int(n/self.batch_size)
 
-    # in filters is the number in the next layer to be added (confusing!)
-    filters_in = layers[-(num_layers+1)][1]
+        # set up the dataset
+        self.dataset = tr_input_fn(self.training_data_filename, None, self.batch_size)
 
-    x = tf.layers.conv2d(inputs=features,
-                         filters=filters_in,
-                         kernel_size=[1, 1],
-                         padding="same",
-                         activation=tf.nn.leaky_relu,
-                         reuse=tf.AUTO_REUSE,
-                         name=D_NET+'/conv1x1')
-                         # name=D_NET+'/conv1x1_{0:d}'.format(num_layers))
+        # somewhere to store the networks
+        self.networks = []
 
-    layer_shape = input_shape
-    f = layers[-1][1]
+        # store the mode and params
+        self.mode = mode
+        self.__params = params
 
-    for layer_id, f in layers_to_build:
+        # store the expansion iteration
+        self.__level = 0
 
-        # convolutional layer
-        c = tf.layers.conv2d(inputs=x,
-                             filters=f,
-                             kernel_size=[3, 3],
-                             padding="same",
-                             activation=tf.nn.leaky_relu,
-                             name=D_NET+'/conva{0:d}'.format(layer_id),
-                             reuse=tf.AUTO_REUSE)
-
-        # convolutional layer
-        c2 = tf.layers.conv2d(inputs=c,
-                             filters=f,
-                             kernel_size=[3, 3],
-                             padding="same",
-                             activation=tf.nn.leaky_relu,
-                             name=D_NET+'/convb{0:d}'.format(layer_id),
-                             reuse=tf.AUTO_REUSE)
-
-        # pooling Layer
-        p = tf.layers.average_pooling2d(inputs=c2,
-                                        pool_size=[2, 2],
-                                        strides=2,
-                                        name=D_NET+'/pool{0:d}'.format(layer_id))
-
-        # update some of the parameters
-        layer_shape = tuple([lsz/2 for lsz in layer_shape])
-        x = p
-
-    # flatten the layer
-    assert(layer_shape == (4,4))
-    # assert(f == layers[-1][1])
-
-    # convolutional layer
-    conv = tf.layers.conv2d(inputs=x,
-                            filters=f,
-                            kernel_size=[3, 3],
-                            padding="same",
-                            activation=tf.nn.leaky_relu,
-                            name=D_NET+'/conv_final',
-                            reuse=tf.AUTO_REUSE)
-
-    # pool_flat = tf.reshape(x, [-1, layer_shape[0]*layer_shape[1]*f])
-    pool_flat = tf.reshape(conv, [-1, 4*4*f])
-    dense = tf.layers.dense(inputs=pool_flat,
-                            units=1024,
-                            activation=tf.nn.leaky_relu,
-                            name=D_NET+'/dense',
-                            reuse=tf.AUTO_REUSE)
-
-    # logits Layer
-    logits = tf.layers.dense(inputs=dense,
-                             units=1,
-                             name=D_NET+'/logits',
-                             reuse=tf.AUTO_REUSE)
-
-    return tf.squeeze(logits)
+        # set up the sequence of filters
+        self.filters = utils.filter_doubling(start_filters=8,
+                                             num_layers=self.num_levels,
+                                             max_filters=512,
+                                             reverse=True)
 
 
+    @property
+    def num_channels(self):
+        return self.__num_channels
+
+    @property
+    def current_level(self):
+        """ return the expansion iteration """
+        return self.__level
+
+    @property
+    def num_iterations_this_level(self):
+        """ return the number of iteration for this expansion """
+        return self.num_epochs_per_level*self.num_batches_per_epoch
+        # return 48 * (20*2**self.expansion_iteration)
+
+    # @property
+    # def layer_shapes(self):
+    #     """ return the final output size of the image """
+    #     return [(self.start_size[0]*(2**l), self.start_size[1]*(2**l)) for l in range(self.num_levels+1)]
+
+    def get_size(self, level):
+        return tuple([s*(2**level) for s in self.start_size])
+
+    @property
+    def current_size(self):
+        """ return the current output size """
+        return self.get_size(self.current_level)
+
+
+    def expand(self):
+        """ Expand the network output size """
+        self.__level+=1
+        assert(self.__level <= self.num_levels)
+
+
+    # @utils.network_device_placement("/gpu:1")
+    def generator(self, Z, filters, **kwargs):
+        """ proxy for the generator network. """
+
+        with tf.variable_scope('generator'):
+            return self.__generator_fn(Z, filters, **kwargs)
+
+
+    # @utils.network_device_placement("/gpu:0")
+    def discriminator(self, X, filters, **kwargs):
+        """ proxy for the discriminator network. """
+        with tf.variable_scope('discriminator'):
+            return self.__discriminator_fn(X, filters, **kwargs)
+
+
+    def get_training_variables(self, current_layer):
+        """ return the training variables for the whole GAN """
+        # # set up the optimizers to update their respective vars
+        d_vars = self.discriminator_training_variables(current_layer)
+        g_vars = self.generator_training_variables(current_layer)
+        d_input_vars = tf.trainable_variables(scope='GAN/discriminator/from_image/from_image{0:d}'.format(current_layer))
+        g_output_vars = tf.trainable_variables(scope='GAN/generator/to_image/to_image{0:d}'.format(current_layer))
+        # if current_layer > 0:
+        #     g_output_vars += tf.trainable_variables(scope='GAN/generator/output/to_image{0:d}'.format(current_layer-1))
+        d_vars += d_input_vars
+        g_vars += g_output_vars
+        print current_layer, " --> D_VARS:", d_vars
+        print current_layer, " --> G_VARS:", g_vars
+        return d_vars, g_vars
+
+
+    def generator_training_variables(self, current_layer):
+        """ return the training variables for the generator network """
+        inputs = tf.trainable_variables(scope='GAN/generator/latent')
+        vars = []
+        for layer in range(current_layer):
+            vars += tf.trainable_variables(scope='GAN/generator/layer_{0:d}'.format(layer))
+        return vars + inputs
+
+    def discriminator_training_variables(self, current_layer):
+        """ return the training variables for the discriminator network """
+        outputs = tf.trainable_variables(scope='GAN/discriminator/output')
+        vars = []
+        for layer in range(current_layer):
+            vars += tf.trainable_variables(scope='GAN/discriminator/layer_{0:d}'.format(layer))
+        return vars + outputs
 
 
 
-def generator_network(batch_size,
-                      num_filters=64,
-                      num_layers=0,
-                      input_shape=(4,4,2),
-                      mode=tf.estimator.ModeKeys.TRAIN):
-    """ The generator network takes a vector of random noise and generates
-    an output image """
 
-    # set the training mode for batch norm
-    is_training = mode==tf.estimator.ModeKeys.TRAIN
+    def build(self, model):
+        """ build the network(s) and placeholders """
+        self._build_placeholders()
+        self._build_networks()
 
-    input_layer = tf.random.normal((batch_size,128),
+        self.initialized = True
+
+
+    def _build_placeholders(self):
+        """ set up the placeholders """
+        # feed placeholders
+        self.X = tf.placeholder(tf.float32, shape=(None, None, None, self.num_channels), name='X')
+        self.Z = tf.placeholder(tf.float32, shape=(None, 1, 1, 512), name='Z')
+        self.alpha = tf.placeholder(tf.float32, shape=(), name='alpha')
+        self.global_step = tf.Variable(0, dtype=tf.int64, trainable=False, name='global_step')
+
+
+
+
+    def _build_networks(self, levels_to_build):
+        """ build all of the networks in one go """
+
+        # set up the optimizers
+        d_opt, g_opt = self._build_optimizers()
+
+        # now build all of the networks
+        for i in range(self.num_levels):
+            Gz, d_loss, g_loss = self._build_network(self.X, self.Z, self.alpha)
+
+            d_vars, g_vars = self.get_training_variables(i)
+            d_solver = d_opt.minimize(d_loss, var_list=d_vars)
+            g_solver = g_opt.minimize(g_loss, var_list=g_vars,
+                                      global_step=self.global_step)
+
+            # self._build_summaries(Gz, d_loss, g_loss)
+
+            self.networks.append((Gz, d_loss, g_loss, d_solver, g_solver))
+
+            self.expand()
+
+
+
+
+
+
+
+    def _build_network(self, X, Z, alpha):
+        """ build the whole network """
+
+        num_layers = self.current_level
+        filters = self.filters[:(num_layers+1)]
+        d_filters_crop = filters[::-1]  # reversed
+        g_filters_crop = filters
+
+        print num_layers, d_filters_crop, g_filters_crop
+
+        print "Building new graph with {0:d} layers...".format(num_layers)
+        with tf.variable_scope('GAN', reuse=tf.AUTO_REUSE):
+
+            # generator discriminator pair
+            g_layers, Gz_raw = self.generator(Z, g_filters_crop)
+
+            # resize the real input
+            X_resized = tf.image.resize_images(X,
+                                               self.current_size,
+                                               align_corners=True)
+
+            # make a mixed output if we have more than one layer...
+            if num_layers > 0:
+
+                prev_Gz = double_size(g_layers[-2])
+                Gz = tf.add(alpha*Gz_raw, (1.-alpha)*prev_Gz)
+
+                # do the same for the real data
+                prev_X = double_size(half_size(X_resized))
+                X_resized = tf.add(alpha*X_resized, (1.-alpha)*prev_X)
+
+            else:
+                Gz = Gz_raw
+
+            # discriminator for arbitrary inputs
+            d_layers, Dz = self.discriminator(Gz, d_filters_crop)
+            _, Dx = self.discriminator(X_resized, d_filters_crop)
+
+            print X_resized.shape, Gz.shape
+
+            # sanity check, make sure the same number of layers in each network
+            assert(len(g_layers) == len(d_layers))
+
+            # operations to mix the input and generated
+            r = tf.random_uniform(shape=[self.batch_size, 1, 1, 1],
+                                  minval=0.0,
+                                  maxval=1.0,
+                                  dtype=tf.float32)
+            mix = tf.add(r*X_resized, (1-r)*Gz)
+            _, Dmix = self.discriminator(mix, d_filters_crop)
+
+
+        # now make the Wasserstein Loss Function
+        with tf.variable_scope('WGAN-GP_loss'):
+            loss_lambda = 10.
+
+            grad = tf.gradients(Dmix, [mix])[0]
+            grad_normed = tf.sqrt(tf.reduce_sum(tf.square(grad),[1,2,3]))
+            # grad_penalty = tf.square((grad_normed-1.0))
+            lipschitz_penalty = tf.square(tf.maximum((grad_normed-1.0), 0))
+            scaled_penalty = loss_lambda*lipschitz_penalty
+            eps_penalty = 0.001 * tf.square(Dx)
+
+            g_loss = tf.reduce_mean(-Dz)
+            d_loss = tf.reduce_mean(-Dx + Dz + scaled_penalty + eps_penalty)
+
+        # hand back the un-mixed Gz
+        return Gz_raw, d_loss, g_loss
+
+
+
+    def _build_optimizers(self, level=0):
+        """ build optimizers for the discriminator and generator """
+
+        with tf.variable_scope('optimizers'):
+            d_opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
+                                           beta1=0.,
+                                           beta2=0.99,
+                                           name='d_solver_{0:d}'.format(level))
+
+            g_opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
+                                           beta1=0.,
+                                           beta2=0.99,
+                                           name='g_solver_{0:d}'.format(level))
+
+
+        return d_opt, g_opt
+
+        # l = self.current_level
+        #
+        # # set up AdamOptimizer for the discriminator and generator
+        # d_vars, g_vars = self.get_training_variables(l)
+        # d_solver = d_opt.minimize(d_loss, var_list=d_vars)
+        # g_solver = g_opt.minimize(g_loss, var_list=g_vars, global_step=global_step)
+        #
+
+
+
+    def _build_summaries(self, d_loss, g_loss, Gz, level=0):
+        # set up an image summary of the output (use green, magenta)
+        layer_id = "{0}x{1}".format(*self.get_size(level))
+        tf.summary.image("Gz_"+layer_id, tf.concat([Gz[...,1:2],
+                                                    Gz[...,0:1],
+                                                    Gz[...,1:2]], axis=-1),
+                                                family="generator")
+        tf.summary.scalar("generator_"+layer_id, g_loss, family="loss")
+        tf.summary.scalar("discriminator_"+layer_id, d_loss, family="loss")
+
+
+
+    def build_latent(self):
+        # build the latent vector generator
+        with tf.variable_scope('latent_random_normal'):
+            Z_ = tf.random.normal((self.batch_size, 1, 1, 512),
                                    mean=0.,
                                    stddev=1.,
                                    dtype=tf.float32,
                                    seed=None,
-                                   name=G_NET+'/input_layer')
+                                   name='Z')
 
-    # pixel norm the input layer
-    input_layer = pixel_norm(input_layer)
+        return Z_
 
-    dense = tf.layers.dense(inputs=input_layer,
-                            units=np.prod(input_shape),
-                            activation=k_leaky_relu_alpha,
-                            name=G_NET+'/dense',
-                            reuse=tf.AUTO_REUSE)
+    def checkpoint(self, sess):
+        pass
 
-    # pixel norm and reshape to an image
-    dense = pixel_norm(tf.reshape(dense, (batch_size,)+input_shape))
+    # @utils.as_tf_session(config=tf.ConfigProto(log_device_placement=True))
+    @utils.as_tf_session()
+    def train(self, session=None):
+        """ Do the training in a session. """
 
-    # first convolutional layer
-    convd = tf.layers.conv2d(inputs=dense,
-                             filters=num_filters,
-                             kernel_size=[3, 3],
-                             padding="same",
-                             activation=k_leaky_relu_alpha,
-                             name=G_NET+'/conv_dense',
-                             reuse=tf.AUTO_REUSE)
+        if not self.initialized:
+            raise Exception("Networks have not been initialized. Please run .build()")
 
-    # final pixel norm before upsclaing begins
-    convd = pixel_norm(convd)
+        # get the dataset iterator, and latent vector
+        data = self.dataset.get_next()
+        Z_ = self.build_latent()
+
+        # set up a file writer with most of the graph...
+        utils.check_and_makedir(self.output_dir)
+        writer = tf.summary.FileWriter(self.output_dir)
+        saver = tf.train.Saver()
+
+        # save out the graph and merge summaries
+        writer.add_graph(session.graph, global_step=0)
+        tf.summary.scalar("alpha", self.alpha, family="alpha")
+        summaries = tf.summary.merge_all()
+
+        # get the value of the global step as an integer
+        def gs(): return int(session.run(self.global_step))
+
+        # INITIALIZE!!
+        session.run(self.dataset.initializer)
+        session.run(tf.global_variables_initializer())
+
+        for n, network in enumerate(self.networks):
+
+            # unzip it
+            Gz, d_loss, g_loss, d_solver, g_solver = network
+            self._build_summaries(d_loss, g_loss, Gz, n)
+            summaries = tf.summary.merge_all()
+
+            for phase in ('fade', 'stabilisation'):
+                for step in range(self.num_iterations_this_level):
+
+                    if phase == 'fade':
+                        fade = float(step+1)/(self.num_iterations_this_level)
+                    else:
+                        fade = 1.0
+
+                    # get a random sample and a real image
+                    z, x = session.run([Z_, data])
+
+                    # set up the feed dictionary
+                    feed = {self.X: x, self.Z: z, self.alpha: fade}
+
+                    # evaluate  the losses
+                    for r in range(self.repeat_batch):
+                        session.run(d_solver, feed_dict=feed)
+                        session.run(g_solver, feed_dict=feed)
+
+                    print gs(), phase, self.get_size(n), fade
+
+                    if gs() % (100*self.repeat_batch) == 0:
+                        print gs(), "Updating summaries..."
+                        # get the summaries...
+                        summary = session.run(summaries, feed_dict=feed)
+                        writer.add_summary(summary, global_step=gs())
+                        writer.flush()
+
+            # save out the model
+            print gs(), "Checkpoint..."
+            model_fn = "model_{0:s}.ckpt".format(str(self.current_size).replace(', ','x'))
+            saver.save(session, os.path.join(self.output_dir, model_fn))
+
+        writer.close()
+        saver.close()
+
+    @utils.as_tf_session()
+    def predict(self, session=None, Z):
+        """ given some latent vector Z, generate some images. """
+        pass
 
 
-    # now set the value of x (the output of the previous layer)
-    # x = convd
-    layers = [convd]
-
-
-    for l in range(num_layers):
-
-        # use filter doubling to set the number of filters
-        # f = min(start_filters*(2**(l+1)), max_num_filters)
-
-        # upscale the image
-        new_size = [sz*(2**(l+1)) for sz in input_shape[0:2]]
-        t = tf.image.resize_nearest_neighbor(layers[-1],
-                                             new_size,
-                                             align_corners=True,
-                                             name=G_NET+'/upscale{0:d}'.format(l))
-
-        # convolutional layer
-        c1 = tf.layers.conv2d(inputs=t,
-                              filters=num_filters,
-                              kernel_size=[3, 3],
-                              padding="same",
-                              activation=k_leaky_relu_alpha,
-                              name=G_NET+'/conva{0:d}'.format(l),
-                              reuse=tf.AUTO_REUSE)
-
-        bn1 = pixel_norm(c1)
-
-        # convolutional layer
-        c2 = tf.layers.conv2d(inputs=bn1,
-                              filters=num_filters,
-                              kernel_size=[3, 3],
-                              padding="same",
-                              activation=k_leaky_relu_alpha,
-                              name=G_NET+'/convb{0:d}'.format(l),
-                              reuse=tf.AUTO_REUSE)
-
-        # now reset the value of x
-        bn2 = pixel_norm(c2)
-        layers.append(bn2)
-
-    # return the layers
-    return layers
 
 
 
 
 
+def create_GAN_dataset(filename, src_pth, dirs, channels):
+    # create a GAN dataset
+    # src_pth = "/mnt/lowe-sn00/Data/Alan/Anna_to_process/"
+    # src_pth = "/media/arl/DataII/Data/competition/RNN/"
 
+    dirs = ['2017_03_31/pos7',
+            '2017_03_31/pos9',
+            '2017_03_31/pos11',
+            '2017_03_31/pos13',
+            '2017_03_31/pos15',
+            '2017_03_31/pos17']
+    channels = ["gfp", "rfp"]
 
+    src = []
+    for d in dirs:
+        channel_files = []
+        for c in channels:
+            channel = os.listdir(os.path.join(src_pth, d, c+"/"))
+            channel = [cf for cf in channel if cf.startswith((c,c.upper()))]
+            channel_files.append(os.path.join(src_pth, d, c, channel[0]))
+        src.append([s for s in channel_files])
 
+    print src
 
+    create_GAN_tfrecord(src, filename, n_samples=256)
 
 def create_GAN_tfrecord(src,
                         filename,
@@ -372,528 +1008,53 @@ def create_GAN_tfrecord(src,
 
 
 
-
-
-
-
-
-def tr_input_fn(record_file, num_epochs=None, batch_size=1, params={}):
-    """ Take the input data path and return an iterator to the dataset """
-
-    tr_data = (tf.data.TFRecordDataset([record_file])
-                .map(lambda x:tr_input_parser(x))
-                .cache()
-                .shuffle(buffer_size=1536)
-                .map(lambda x:tr_augment(x,params), num_parallel_calls=4)
-                .batch(batch_size)
-                .repeat(num_epochs)
-                .prefetch(batch_size))
-
-    # create TensorFlow Iterator object
-    # iterator = tr_data.make_one_shot_iterator()
-    # return iterator.get_next()
-    return tr_data.make_initializable_iterator()
-
-def tr_input_parser(serialized_example):
-    """ Parse input images """
-
-    # set up the fixed length features to load
-    feature = {'train/image': tf.FixedLenFeature([], tf.string),
-               'train/width': tf.FixedLenFeature([], tf.int64),
-               'train/height': tf.FixedLenFeature([], tf.int64),
-               'train/channels': tf.FixedLenFeature([], tf.int64)}
-
-    features = tf.parse_single_example(serialized_example, features=feature)
-
-    # convert the image data from string back to the numbers
-    image = tf.decode_raw(features['train/image'], tf.uint8)
-
-    # get the size of the images
-    height = tf.cast(features['train/height'], tf.int32)
-    width = tf.cast(features['train/width'], tf.int32)
-    channels = tf.cast(features['train/channels'], tf.int32)
-    image_shape = tf.stack([height, width, channels])
-
-    # reshape image data into the original shape
-    img = tf.cast(tf.reshape(image, image_shape), tf.float32)
-
-    # normalize the image
-    mean, var = tf.nn.moments(img, axes=[0,1], keep_dims=True)
-    img = tf.nn.batch_normalization(img,
-                                    mean,
-                                    var,
-                                    None, None, 1e-99,
-                                    name='dataset_image_normalization')
-
-    # # need to normalise the input images to -1 to 1
-    # img = (img/128.)-1.
-
-    return img
-
-def tr_augment(features, params):
-    """ Reshape, randomly crop and flip """
-
-    # random crop
-    img = tf.image.random_crop(features, (512,512,2))
-
-    # now do some random flips
-    img = tf.image.random_flip_left_right(img)
-    img = tf.image.random_flip_up_down(img)
-
-    return img
-
-
-
-
-# def random_flip_labels(labels, num_random_flips=2):
-#     """ randomly flip training labels """
-#     new_labels = labels.copy()
-#     idx = np.random.choice(labels.shape[0],
-#                            num_random_flips,
-#                            replace=False)
-#     new_labels[idx] = 1-labels[idx]
-#     return new_labels
-#
-# def soft_labels(labels, max_val=0.1):
-#     """ make the labels soft """
-#     soft_labels = labels.copy()
-#     r = np.random.random(labels.shape[0])
-#     soft_labels = np.abs(soft_labels - max_val*r)
-#     return np.array(soft_labels)
-
-
-def init_new_variables(session, variables=None):
-    """ Initialize only new variables """
-    all_vars = tf.global_variables() + tf.local_variables()
-    get_var = {v.op.name: v for v in all_vars}
-    uninit_var_names = session.run(tf.report_uninitialized_variables(variables))
-    uninit_vars = [get_var[v] for v in uninit_var_names]
-    init_op = tf.variables_initializer(uninit_vars)
-    session.run(init_op)
-
-
-
-
-
-class GenerativeAdverserialNetwork(object):
-    """ Generative Adverserial Network
-
-    This is a GAN (based on DCGAN and ProGAN, references below) to synthesize
-    microscopy images.
-
-
-    Before training:
-        The network needs training data. Before running, use the
-        create_GAN_tfrecord function to create a serialized tfrecord of the
-        training data. This is much more efficient for dataio. See the
-        documentation for that function for how to do this.
-
-        # must set up a tfrecord file of training data
-        create_GAN_tfrecord(src, filename, n_samples=256)
-
-
-    Args:
-        params:             a dictionary of parameters from the config
-        mode:               training mode
-        discriminator_fn:   a function that builds a discriminator network
-        generator_fn:       a function that builds a generator network
-
-    Use:
-        # set up a GAN configuration
-        config = GAN2DConfiguration()
-        config.batch_size = 32
-        config.training_data = "train_GAN.tfrecord"
-
-        # set up the GAN
-        mode = tf.estimator.ModeKeys.TRAIN
-        gan = GenerativeAdverserialNetwork(config.to_params(), mode)
-        gan.output_dir = "/mnt/lowe-sn00/JobServer/output/GAN/"
-
-        # train it
-        gan.train()
-
-
-    Notes:
-        Generative Adversarial Networks
-        Ian J. Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing Xu,
-        David Warde-Farley, Sherjil Ozair, Aaron Courville, Yoshua Bengio
-        https://arxiv.org/abs/1406.2661
-
-        Progressive Growing of GANs for Improved Quality, Stability,
-        and Variation
-        Tero Karras, Timo Aila, Samuli Laine, Jaakko Lehtinen
-        https://arxiv.org/abs/1710.10196
-
-    """
-    def __init__(self,
-                 params,
-                 mode,
-                 discriminator_fn=discriminator_network,
-                 generator_fn=generator_network):
-
-        self.__discriminator_fn = discriminator_fn
-        self.__generator_fn = generator_fn
-        self.saver = None
-
-        # NOTE(arl): this is a hang-over from the Estimator config interface
-        self.__num_channels = params.get('num_outputs', 2)
-        self.batch_size = params.get('batch_size', 32)
-        self.num_expansions = params.get('num_expansions', 3)
-        self.num_epochs_per_expansion = params.get('num_epochs_per_expansion', 10)
-        self.balance_loss = params.get('balance_loss', False)
-        self.start_size = params.get('start_size', (4,4))
-        self.training_data_fn = params.get('training_data', None)
-        self.learning_rate = params.get('learning_rate', 1e-3)
-
-        # get the number of entries in the tf_record_file
-        n = len([x for x in tf.python_io.tf_record_iterator(self.training_data_fn)])
-        self.num_batches_per_epoch = int(n/self.batch_size)
-
-        # store the mode and params
-        self.mode = mode
-        self.__params = params
-
-        # store the expansion iteration
-        self.__expansion_iter = 0
-
-        # space to store the initialized vars
-        # self.initialized_vars = []
-
-
-    @property
-    def num_channels(self):
-        return self.__num_channels
-
-    @property
-    def expansion_iteration(self):
-        """ return the expansion iteration """
-        return self.__expansion_iter
-
-    @property
-    def num_iterations_this_expansion(self):
-        """ return the number of iteration for this expansion """
-        return self.num_epochs_per_expansion*self.num_batches_per_epoch
-        # return 48 * (20*2**self.expansion_iteration)
-
-    @property
-    def final_size(self):
-        """ return the final output size of the image """
-        return tuple([s*(2**num_expansions) for s in self.start_size])
-
-    @property
-    def current_size(self):
-        """ return the current output size """
-        return tuple([s*(2**self.expansion_iteration) for s in self.start_size])
-
-
-    def expand(self):
-        """ Expand the network output size """
-        self.__expansion_iter+=1
-        assert(self.__expansion_iter <= self.num_expansions)
-
-
-    @utils.network_device_placement("/gpu:1")
-    def generator(self, alpha, batch_size, **kwargs):
-        """ proxy for the generator network. This function also fades in
-        layers to prevent the 'shock' of adding new layers to the network.
-
-        NOTE(arl): could move the fade to the generator_fn definition.
-        """
-
-        # get the generator output before 1x1 convolution layer
-        gen_layers = self.__generator_fn(batch_size, **kwargs)
-
-        # final 1x1 convolution to get the output image
-        out = tf.layers.conv2d(inputs=gen_layers[-1],
-                               filters=self.num_channels,
-                               kernel_size=[1, 1],
-                               kernel_initializer=k_init,
-                               activation=tf.nn.tanh,
-                               padding="same",
-                               name=G_NET+'/conv1x1',
-                               reuse=tf.AUTO_REUSE)
-
-        if kwargs['num_layers']>0:
-            # this is a 1x1 convolution (using the same kernels), but with the
-            # fading out pre-layer
-            out_pre = tf.layers.conv2d(inputs=gen_layers[-2],
-                                       filters=self.num_channels,
-                                       kernel_size=[1, 1],
-                                       kernel_initializer=k_init,
-                                       activation=tf.nn.tanh,
-                                       padding="same",
-                                       name=G_NET+'/conv1x1',
-                                       reuse=tf.AUTO_REUSE)
-
-            out_pre = tf.image.resize_nearest_neighbor(out_pre,
-                                                       self.current_size,
-                                                       align_corners=True,
-                                                       name=G_NET+'/upscale_pre')
-
-            # output is the sum of the weighted fading in and out layers
-            weighted_out = tf.add(alpha*out, (1.0-alpha)*out_pre)
-        else:
-            weighted_out = out
-        return weighted_out
-
-    @utils.network_device_placement("/gpu:0")
-    def discriminator(self, alpha, X, sz, **kwargs):
-        return self.__discriminator_fn(X, sz, **kwargs)
-
-    @property
-    def combined_training_variables(self):
-        """ return the training variables for the whole GAN """
-        return self.generator_training_variables + self.discriminator_training_variables
-
-    @property
-    def generator_training_variables(self):
-        """ return the training variables for the generator network """
-        return [v for v in tf.trainable_variables() if v.name.startswith(G_NET)]
-
-    @property
-    def discriminator_training_variables(self):
-        """ return the training variables for the discriminator network """
-        return [v for v in tf.trainable_variables() if v.name.startswith(D_NET)]
-
-    # @property
-    # def uninitialized_variables(self):
-    #     pass
-
-
-
-
-    def build_network(self, alpha, X):
-        """ build the whole network """
-
-        print "Building new graph..."
-
-        # the number of layers is the expansion iteration
-        num_layers = self.expansion_iteration
-        sz = self.current_size
-        half_batch = int(self.batch_size/2)
-
-        # resize input data to the correct shape
-        X = tf.image.resize_images(X, self.current_size, align_corners=True)
-        X_ = self.generator(alpha, self.batch_size, num_layers=num_layers)
-
-        # now slice these/concat these for the correct inputs
-        # X = tf.concat([X_rsz[0:half_batch,...], X_[0:half_batch,...]], axis=0)
-        real_logits = self.discriminator(alpha, X, sz, num_layers=num_layers)
-        fake_logits = self.discriminator(alpha, X_, sz, num_layers=num_layers)
-
-        # set the loss functions
-        d_loss_fake = tf.losses.sigmoid_cross_entropy(tf.zeros_like(fake_logits), fake_logits)
-        d_loss_real = tf.losses.sigmoid_cross_entropy(tf.ones_like(real_logits), real_logits)
-        d_loss = 0.5 * (d_loss_fake + d_loss_real)
-
-        g_loss = tf.losses.sigmoid_cross_entropy(tf.ones_like(fake_logits), fake_logits)
-
-        return X_, d_loss, g_loss
-
-
-
-    def checkpoint(self, sess):
-        pass
-
-    @utils.as_tf_session()
-    def train(self, session=None):
-        """ Do the training in a session.
-        NOTE(arl): the Estimator interface currently makes this difficult. """
-
-        # get a dataset to train with
-        filename = self.training_data_fn
-
-        # set the first run flag
-        first_run = True
-
-        # store the loss curves
-        g_loss_plot = []
-        d_loss_plot = []
-        alpha_plot = []
-        scale_plot = []
-
-        # get a dataset iterator
-        dataset_iterator = tr_input_fn(filename, None, self.batch_size)
-
-        # make some optimizers
-        d_opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                                       beta1=0.5,
-                                       name='d_solver')
-
-        g_opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                                       beta1=0.5,
-                                       name='g_solver')
-
-        # global iteration
-        global_step = 0
-
-        # perform a number of expansions
-        while self.expansion_iteration <= self.num_expansions:
-
-            # inputs, X - real data, X_ - generated data
-            X_size = (None, 512, 512, self.num_channels)
-            X = tf.placeholder(tf.float32, shape=X_size, name='X')
-            alpha = tf.placeholder(tf.float32, shape=(), name='alpha')
-
-            # set up the discriminator and generator networks
-            predict, d_loss, g_loss = self.build_network(alpha, X)
-
-            # set up the optimizers to update their respective vars
-            d_solver = d_opt.minimize(d_loss, var_list=self.discriminator_training_variables)
-            g_solver = g_opt.minimize(g_loss, var_list=self.generator_training_variables)
-
-            # initialize the variables
-            if first_run:
-                session.run(tf.global_variables_initializer())
-                session.run(dataset_iterator.initializer)
-                self.saver = tf.train.Saver()
-                first_run = False
-            else:
-                # on subsequent iterations, we only need to initialize
-                # new layers that have been added to the network
-                uninit = init_new_variables(session)
-
-            # set up the real data iterator
-            data = dataset_iterator.get_next()
-
-            # iterate over the data
-            for step in range(self.num_iterations_this_expansion):
-
-                # this determines the fading in of new layers...
-                a = min(1., float(step)/(0.5*self.num_iterations_this_expansion-1.))
-
-                # get some real images from the dataset
-                X_real = session.run(data)
-
-                # do the training updates...
-                f_d = {alpha: a, X: X_real}
-                _, D_loss_curr = session.run([d_solver, d_loss], feed_dict=f_d)
-                _, G_loss_curr = session.run([g_solver, g_loss], feed_dict=f_d)
-
-                # store the loss for visualisation
-                g_loss_plot.append(G_loss_curr)
-                d_loss_plot.append(D_loss_curr)
-                alpha_plot.append(a)
-                scale_plot.append(self.expansion_iteration)
-
-                # write out some stats to stdout
-                if global_step % 10 == 0:
-                    print "Alpha: {0:2.2f},".format(a),
-                    print "Exp: {0:d},".format(self.expansion_iteration),
-                    print "Sz: {0:s},".format(str(self.current_size)),
-                    print "Step: {0:d}/".format(global_step),
-                    print "{0:d},".format(self.num_iterations_this_expansion*self.num_expansions),
-                    print "D_loss: {0:2.5f},".format(D_loss_curr),
-                    print "G_loss: {0:2.5f},".format(G_loss_curr),
-                    print "Model size: {0:d}".format(len(self.combined_training_variables))
-
-
-                # save out some images
-                if global_step % 100 == 0:
-                    # get some images from the generator
-                    X_gen = session.run(predict, feed_dict={alpha: a})
-
-                    size_fn = str(self.current_size).replace(', ','x')
-                    fn = "out_{0:d}_{1:s}.tif".format(global_step, size_fn)
-                    snap_fn = os.path.join(self.output_dir, "snaps", fn)
-                    loss_fn = os.path.join(self.output_dir, "snaps", "loss.png")
-
-                    # make an image to save, but change from (256,256,2) to
-                    # (2,256,256) for the tiff format...
-                    im_to_save = np.array((1.+X_gen[0,...])*128, dtype='uint8')
-                    t.imsave(snap_fn, np.rollaxis(im_to_save, -1, 0))
-
-
-                    # plot the loss also
-                    plt.figure()
-                    plt.plot(g_loss_plot, 'r-', label='generator loss')
-                    plt.plot(d_loss_plot, 'b-', label='discriminator loss')
-                    plt.plot(alpha_plot, 'k:', label='alpha')
-                    plt.plot(scale_plot, 'k-', label='output size')
-                    plt.yscale('log')
-                    plt.ylim([0.001, 100.])
-                    plt.xlabel('Iterations')
-                    plt.ylabel('Loss')
-                    plt.title('Iterations: {0:d}'.format(global_step))
-                    plt.legend()
-                    plt.savefig(loss_fn, dpi=144)
-                    plt.close()
-
-                # increment the counter
-                global_step+=1
-
-
-            # save the model
-            self.saver.save(session, os.path.join(self.output_dir, "model"), global_step=global_step)
-
-            # expand the network
-            self.expand()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 if __name__ == "__main__":
+
+    outdir = "/mnt/lowe-sn00/JobServer/output/"
+
+    import argparse
+
+    p = argparse.ArgumentParser(description='Sequitr: Progressive GAN')
+    p.add_argument('--outdir', default=outdir,
+                    help='Path to job directory')
+    p.add_argument('--num_epochs', type=int, default=100,
+                    help='Specify the number of epochs per expansion')
+    p.add_argument('--num_levels', type=int, default=8,
+                    help='Specify the number of expansions from (4,4) start')
+    p.add_argument('--batch_size', type=int, default=32,
+                    help='Specify the batch size')
+    # p.add_argument('--use_GP', action='store_true',
+    #                 help='Use gradient penalty rather than Lipschitz.')
+
+    args = p.parse_args()
+    print args
+
 
     filename = os.path.join(MODELDIR, "train_GAN.tfrecord")
 
-    # # # create a GAN dataset
-    # src_pth = "/mnt/lowe-sn00/Data/Alan/Anna_to_process/"
-    # # src_pth = "/media/arl/DataII/Data/competition/RNN/"
-    # # dirs = ['2017_02_28/pos0',
-    # #         '2017_02_28/pos2',
-    # #         '2017_02_28/pos4',
-    # #         '2017_02_28/pos6',
-    # #         '2017_02_28/pos8',
-    # #         '2017_02_28/pos10',
-    # #         '2017_02_28/pos12',
-    # #         '2017_02_28/pos14',
-    # #         '2017_03_31/pos7',
-    # #         '2017_03_31/pos9',
-    # #         '2017_03_31/pos11',
-    # #         '2017_03_31/pos13',
-    # #         '2017_03_31/pos15',
-    # #         '2017_03_31/pos17']
-    # dirs = ['2017_03_31/pos7',
-    #         '2017_03_31/pos9',
-    #         '2017_03_31/pos11',
-    #         '2017_03_31/pos13',
-    #         '2017_03_31/pos15',
-    #         '2017_03_31/pos17']
-    # channels = ["gfp", "rfp"]
-    #
-    # src = []
-    # for d in dirs:
-    #     channel_files = []
-    #     for c in channels:
-    #         channel = os.listdir(os.path.join(src_pth, d, c+"/"))
-    #         channel = [cf for cf in channel if cf.startswith((c,c.upper()))]
-    #         channel_files.append(os.path.join(src_pth, d, c, channel[0]))
-    #     src.append([s for s in channel_files])
-    #
-    # print src
-    #
-    # create_GAN_tfrecord(src, filename, n_samples=256)
-
     # # get the configuration
     config = GAN2DConfiguration()
-    config.batch_size = 32
+    config.num_levels = args.num_levels
+    config.num_epochs_per_level = args.num_epochs
+    config.batch_size = args.batch_size
     config.training_data = filename
+
+    def get_next_run_number(folder):
+        runs = [f for f in os.listdir(folder) if os.path.isdir(os.path.join(folder,f)) if f.startswith('GAN')]
+        if not runs:
+            return 0
+        else:
+            return max([int(r.lstrip('GAN')) for r in runs])+1
+
+
+    output_dir = os.path.join(outdir,"GAN{0:d}".format(get_next_run_number(outdir)))
+    print output_dir
+
 
     # set up the GAN
     mode = tf.estimator.ModeKeys.TRAIN
     gan = GenerativeAdverserialNetwork(config.to_params(), mode)
+    gan.output_dir = output_dir
 
-    gan.output_dir = "/mnt/lowe-sn00/JobServer/output/GAN/"
-
+    gan.build()
     gan.train()

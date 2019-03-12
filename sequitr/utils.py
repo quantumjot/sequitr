@@ -82,6 +82,27 @@ def as_tf_session(**tf_session_kwargs):
 
 
 
+def filter_doubling(start_filters=8,
+                    num_layers=7,
+                    max_filters=4096,
+                    reverse=False):
+    """ Set up a sequence of filters, doubling at every level
+
+    Args:
+        start_filters:  (int) the number of filters in the first level
+        num_layers:     (int) the number of layers/filters to generate
+        max_filters:    (int) set an upper limit on the number of filters
+        reverse:        (bool) reverse the sequence to descending
+
+    Returns:
+        filters:        a list of filters, e.g. [4, 8, 16, 32, 64]
+
+    """
+    f = [min(start_filters*(2**i), max_filters) for i in range(num_layers)]
+    if reverse: f.reverse()
+    return f
+
+
 
 
 def check_and_makedir(folder_name):
