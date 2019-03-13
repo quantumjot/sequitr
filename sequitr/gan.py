@@ -520,6 +520,7 @@ class GenerativeAdverserialNetwork(object):
         self.training_data_filename = params.get('training_data', None)
         self.learning_rate = params.get('learning_rate', 1e-3)
 
+
         if mode == tf.estimator.ModeKeys.TRAIN:
             # get the number of entries in the tf_record_file
             n = len([x for x in tf.python_io.tf_record_iterator(self.training_data_filename)])
@@ -530,6 +531,7 @@ class GenerativeAdverserialNetwork(object):
 
 
         # somewhere to store the networks
+        self.restore = False
         self.networks = []
 
         # store the mode and params
@@ -784,8 +786,6 @@ class GenerativeAdverserialNetwork(object):
 
         return Z_
 
-    def restore(self, session, filename):
-        pass
 
     # @utils.as_tf_session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=True))
     @utils.as_tf_session()
@@ -794,6 +794,9 @@ class GenerativeAdverserialNetwork(object):
 
         if not self.initialized:
             raise Exception("Networks have not been initialized. Please run .build()")
+
+
+
 
         # get the dataset iterator, and latent vector
         data = self.dataset.get_next()
@@ -813,15 +816,23 @@ class GenerativeAdverserialNetwork(object):
         # get the value of the global step as an integer
         def gs(): return int(session.run(self.global_step))
 
+        # are we restoring a model?
+        if self.restore:
+            filename = os.path.join(self.output_dir, 'model_(1024x1024).ckpt')
+            saver.restore(session, filename)
+            start_network = 7
+        else:
+            start_network = 0
+
         # INITIALIZE!!
         session.run(self.dataset.initializer)
         session.run(tf.global_variables_initializer())
 
         # iterate over each network
-        for n, network in enumerate(self.networks):
+        for n in range(start_network, len(self.networks)):
 
             # unzip network outputs
-            Gz, d_loss, g_loss, d_solver, g_solver = network
+            Gz, d_loss, g_loss, d_solver, g_solver = self.networks[n]
             self._build_summaries(d_loss, g_loss, Gz, n)
             summaries = tf.summary.merge_all()
 
@@ -1058,6 +1069,8 @@ if __name__ == "__main__":
                     help='Specify the batch size')
     p.add_argument('--train', action='store_true',
                     help='Train the model if this flag is present')
+    p.add_argument('--restore', action='store_true',
+                    help='Continue training a model')
 
     args = p.parse_args()
     workdir = args.workdir
@@ -1089,7 +1102,11 @@ if __name__ == "__main__":
         # set up the GAN
         mode = tf.estimator.ModeKeys.TRAIN
         gan = GenerativeAdverserialNetwork(config.to_params(), mode)
-        output_dir = os.path.join(workdir,"GAN{0:d}".format(get_run_number(workdir)+1))
+        gan.restore = args.restore
+        if not args.restore:
+            output_dir = os.path.join(workdir,"GAN{0:d}".format(get_run_number(workdir)+1))
+        else:
+            output_dir = workdir
         gan.output_dir = output_dir
         gan.build()
         gan.train()
