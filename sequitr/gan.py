@@ -508,6 +508,8 @@ class GenerativeAdverserialNetwork(object):
         self.__discriminator_fn = discriminator_fn
         self.__generator_fn = generator_fn
 
+        self.initialized = False
+
         # NOTE(arl): this is a hang-over from the Estimator config interface
         self.__num_channels = params.get('num_outputs', 2)
         self.batch_size = params.get('batch_size', 32)
@@ -785,7 +787,7 @@ class GenerativeAdverserialNetwork(object):
     def restore(self, session, filename):
         pass
 
-    # @utils.as_tf_session(config=tf.ConfigProto(log_device_placement=True))
+    # @utils.as_tf_session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=True))
     @utils.as_tf_session()
     def train(self, session=None):
         """ Train the model. """
@@ -799,6 +801,7 @@ class GenerativeAdverserialNetwork(object):
 
         # set up a file writer with most of the graph...
         utils.check_and_makedir(self.output_dir)
+        saver = tf.train.Saver()
         writer = tf.summary.FileWriter(self.output_dir)
 
 
@@ -855,9 +858,10 @@ class GenerativeAdverserialNetwork(object):
                         writer.flush()
 
             # save out the model
-            print gs(), "Checkpoint..."
+
             sz_fn = str(self.get_size(n)).replace(', ','x')
-            model_fn = "model_{0:s}.ckpt".format()
+            model_fn = "model_{0:s}.ckpt".format(sz_fn)
+            print gs(), "Checkpoint {0:s}...".format(model_fn)
             saver.save(session, os.path.join(self.output_dir, model_fn))
 
         writer.close()
@@ -865,37 +869,20 @@ class GenerativeAdverserialNetwork(object):
 
         # at the end of training, create a model
 
-
-
-
-
-    @utils.as_tf_session(graph=tf.Graph())
-    def predict(self, session=None):
-        """ given some latent vector Z, generate some images. """
-
-        export_dir = os.path.join(self.output_dir,'export')
-        model = tf.saved_model.loader.load(session, [tf.saved_model.tag_constants.SERVING], export_dir)
-
-        sig = tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
-        z = model.signature_def[sig].inputs['Z'].name
-        a = model.signature_def[sig].inputs['alpha'].name
-        Gz = model.signature_def[sig].outputs['Gz'].name
-
-        output = session.run(Gz, {z: latent, a: 1.0})
-        return output
-
-
     def convert_checkpoint_to_model(self):
         """ convert a checkpoint to a model to be used for inference """
 
         # build the network
-        self.build()
+        if not self.initialized: self.build()
         saver = tf.train.Saver()
 
         # pick a particular level
-        level=5
+        level=-1
         filename = os.path.join(self.output_dir, "model_(1024x1024).ckpt")
+        # filename = os.path.join(self.output_dir, "model_(512x512).ckpt")
         export_dir = os.path.join(self.output_dir,'export')
+
+        print 'Converting {0:s} to model...'.format(filename)
 
         @utils.as_tf_session()
         def convert_to_model(session=None):
@@ -914,6 +901,25 @@ class GenerativeAdverserialNetwork(object):
         convert_to_model()
 
 
+
+    @utils.as_tf_session(graph=tf.Graph())
+    def predict(self, session=None, latent=None):
+        """ given some latent vector Z, generate some images. """
+
+
+        if not latent:
+            raise Exception('You must provide latent variables to the model.')
+
+        export_dir = os.path.join(self.output_dir,'export')
+        model = tf.saved_model.loader.load(session, [tf.saved_model.tag_constants.SERVING], export_dir)
+
+        sig = tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
+        z = model.signature_def[sig].inputs['Z'].name
+        a = model.signature_def[sig].inputs['alpha'].name
+        Gz = model.signature_def[sig].outputs['Gz'].name
+
+        output = session.run(Gz, {z: Z, a: 1.0})
+        return output
 
 
 
@@ -1037,12 +1043,12 @@ def create_GAN_tfrecord(src,
 
 if __name__ == "__main__":
 
-    outdir = "/mnt/lowe-sn00/JobServer/output/"
+    workdir = "/mnt/lowe-sn00/JobServer/output/"
 
     import argparse
 
     p = argparse.ArgumentParser(description='Sequitr: Progressive GAN')
-    p.add_argument('--outdir', default=outdir,
+    p.add_argument('--workdir', default=workdir,
                     help='Path to job directory')
     p.add_argument('--num_epochs', type=int, default=100,
                     help='Specify the number of epochs per expansion')
@@ -1054,7 +1060,7 @@ if __name__ == "__main__":
                     help='Train the model if this flag is present')
 
     args = p.parse_args()
-    print args
+    workdir = args.workdir
 
 
     filename = os.path.join(MODELDIR, "train_GAN.tfrecord")
@@ -1066,12 +1072,12 @@ if __name__ == "__main__":
     config.batch_size = args.batch_size
     config.training_data = filename
 
-    def get_next_run_number(folder):
+    def get_run_number(folder):
         runs = [f for f in os.listdir(folder) if os.path.isdir(os.path.join(folder,f)) if f.startswith('GAN')]
         if not runs:
             return 0
         else:
-            return max([int(r.lstrip('GAN')) for r in runs])+1
+            return max([int(r.lstrip('GAN')) for r in runs])
 
 
 
@@ -1083,14 +1089,29 @@ if __name__ == "__main__":
         # set up the GAN
         mode = tf.estimator.ModeKeys.TRAIN
         gan = GenerativeAdverserialNetwork(config.to_params(), mode)
-        output_dir = os.path.join(outdir,"GAN{0:d}".format(get_next_run_number(outdir)))
+        output_dir = os.path.join(workdir,"GAN{0:d}".format(get_run_number(workdir)+1))
         gan.output_dir = output_dir
         gan.build()
         gan.train()
+        gan.convert_checkpoint_to_model()
+    else:
+        # set up the GAN for prediction
+        mode = tf.estimator.ModeKeys.PREDICT
+        gan = GenerativeAdverserialNetwork(config.to_params(), mode)
+        gan.output_dir = workdir
+        # gan.convert_checkpoint_to_model()
 
-    # set up the GAN
-    mode = tf.estimator.ModeKeys.PREDICT
-    gan = GenerativeAdverserialNetwork(config.to_params(), mode)
-    gan.output_dir = "/Users/arl/Documents/GAN"
-    # gan.convert_checkpoint_to_model()
-    gan.predict()
+
+        Z = np.zeros((512,1,1,512))
+        for n in range(Z.shape[0]):
+            Z[n,0,0,:] = np.sin((n/256.)+np.arange(Z.shape[0])/64.)
+
+        Gz = gan.predict(latent=Z)
+
+        for i in range(Gz.shape[0]):
+            to_rgb_fn = os.path.join(workdir, 'export_{}.tif'.format(i))
+            to_rgb = np.concatenate([Gz[i,...,1:2],
+                                     Gz[i,...,0:1],
+                                     Gz[i,...,1:2]], axis=-1)
+            to_rgb = ((1.+to_rgb/3.)*127.5).clip(0,255)
+            t.imsave(to_rgb_fn, to_rgb.astype('uint8'))
