@@ -152,12 +152,8 @@ def discriminator_network(x, filters):
     The discriminator network is essentially a standard convolutional
     neural network classifier. Build the full network in one shot.
 
-    Returns a 'probability' of being real.
-
-    Notes:
-         - this doesn't use a 1x1 convolution layer at the start. That
-           needs to be added separately since we may be feeding in to a
-           lower layer when training.
+    Returns a 'probability' of being real if using a sigmoidal activation
+    on the output layer.
     """
 
     # store the input layers so that we can inject data at the correct scale
@@ -249,12 +245,7 @@ def discriminator_network(x, filters):
 
 def generator_network(z, filters, start_shape=(4,4)):
     """ The generator network takes a vector of random noise and generates
-    an output imageself.
-
-    Notes:
-         - this doesn't use a 1x1 convolution layer at the end. That
-           needs to be added separately since we may be extracting a
-           lower layer when training.
+    an output image.
     """
 
     with tf.variable_scope('latent'):
@@ -468,7 +459,7 @@ class GenerativeAdverserialNetwork(object):
 
     Args:
         params:             a dictionary of parameters from the config
-        mode:               training mode (DEPRECATED)
+        mode:               training mode
         discriminator_fn:   a function that builds a discriminator network
         generator_fn:       a function that builds a generator network
 
