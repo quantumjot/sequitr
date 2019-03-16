@@ -48,7 +48,7 @@ def k_leaky_relu_alpha(features, **kwargs):
 
 def pixel_norm(x, epsilon=1e-8):
     """ pixelnorm replacement for batch normalization as used in ProGAN """
-    return x * tf.rsqrt(tf.reduce_mean(tf.square(x), axis=1, keepdims=True) + epsilon)
+    return x * tf.rsqrt(tf.reduce_mean(tf.square(x), axis=-1, keepdims=True) + epsilon)
 
 
 
@@ -66,7 +66,7 @@ def weighted_conv2d(inputs=None,
                     name='conv',
                     reuse=tf.AUTO_REUSE,
                     norm=True):
-    """ perform a weighted initialization of a 2d convolution """
+    """ perform a weighted 2d convolution """
 
     with tf.variable_scope(name, reuse=reuse):
 
@@ -354,7 +354,7 @@ def tr_input_fn(record_file, num_epochs=None, batch_size=1, params={}):
                 .map(lambda x:tr_augment(x,params), num_parallel_calls=4)
                 .batch(batch_size)
                 .repeat(num_epochs)
-                .prefetch(batch_size))
+                .prefetch(1))
 
     # create TensorFlow Iterator object
     return tr_data.make_initializable_iterator()
