@@ -473,6 +473,16 @@ class CentroidWriter(HDF5FileHandler):
 
     This works with both images (2D) and volumes (3D).
 
+    Args:
+        filename:   the HDF5 filename to write to
+
+    Members:
+        write():    takes the segmentation (typically uint8) and optionally,
+                    the original image data. If the original image data is
+                    provided, some image statistics are calculated.
+
+                    
+
     """
     def __init__(self, filename=None):
         HDF5FileHandler.__init__(self, filename)
@@ -491,7 +501,7 @@ class CentroidWriter(HDF5FileHandler):
             # volumetric
             def get_cartesian_coords(coords):
                 x,y,z = zip(*coords)
-                return x,y,z
+                return x, y, z
             im_type = "Volumetric"
 
             # also need to swap some axes, default input is N,Z,X,Y
@@ -501,7 +511,7 @@ class CentroidWriter(HDF5FileHandler):
             # planar
             def get_cartesian_coords(coords):
                 x,y = zip(*coords)
-                return x,y,[0.0]*len(x)
+                return x, y, [0.0]*len(x)
             im_type = "Image"
         else:
             logger.error("Incorrect image data shape.")
