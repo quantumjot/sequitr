@@ -307,7 +307,7 @@ def worker(args, log=True):
 if __name__ == '__main__':
     # parse the job file as an input argument and pass to the worker to execute
     # worker returns following the job
-    parser = argparse.ArgumentParser(description='ImPy worker process')
+    parser = argparse.ArgumentParser(description='Sequitr worker process')
     parser.add_argument('--job', help='Path to job description file')
     parser.add_argument('--out', help='Path to output folder')
     args = parser.parse_args()

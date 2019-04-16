@@ -1,5 +1,5 @@
 # Sequitr
-** -- the conclusion of an inference**
+**-- the conclusion of an inference**
 
 **WORK IN PROGRESS** (Last update: 04/03/2019)  
 *Please note, this is not the full repository (yet)*
@@ -32,54 +32,12 @@ the following additional packages:
 *Sequitr* is written in Python. For best performance we recommend using a GPU with at least 8Gb RAM.
 
 
+---
 
-### Using the Generative Adversarial Network
+### Documentation
 
-First generate the TFRecord files of the images to sample from. The n_samples parameter choses n_samples frames from the original dataset:
-```python
-import gan
+Complete instructions for installation, training and running a server are found in the [wiki](https://github.com/quantumjot/sequitr/wiki).
 
-src = [["<some_path_to_your_data>/gfp.tif", "<some_path_to_your_data>/rfp.tif"]]
-filename = "train_GAN.tfrecord"
-gan.create_GAN_tfrecord(src, filename, n_samples=256)
-```
-
-Then, to train the network:
-```python
-# set up a GAN configuration
-config = gan.GAN2DConfiguration()
-config.batch_size = 32
-config.training_data = "train_GAN.tfrecord"
-
-# set up the GAN
-mode = tf.estimator.ModeKeys.TRAIN
-GAN = gan.GenerativeAdverserialNetwork(config.to_params(), mode)
-GAN.output_dir = "<some_path_to_your_output>/GAN/"
-
-# train it
-GAN.train()
-```
-
-There are lots of other parameters to play with. By default this creates the discriminator and generator networks on different GPUs. You may need to change that. Once training, the stdout looks like this:
-```
-Building new graph...
-Building <function generator at 0x7fa6bd55cc08> on dev:/gpu:1
-Building <function discriminator at 0x7fa6bd55ccf8> on dev:/gpu:0
-Building <function discriminator at 0x7fa6bd55ccf8> on dev:/gpu:0
-tensorflow/core/kernels/data/shuffle_dataset_op.cc:98] Filling up shuffle buffer (this may take a while): 339 of 1536
-tensorflow/core/kernels/data/shuffle_dataset_op.cc:98] Filling up shuffle buffer (this may take a while): 728 of 1536
-tensorflow/core/kernels/data/shuffle_dataset_op.cc:98] Filling up shuffle buffer (this may take a while): 1112 of 1536
-tensorflow/core/kernels/data/shuffle_dataset_op.cc:98] Filling up shuffle buffer (this may take a while): 1505 of 1536
-tensorflow/core/kernels/data/shuffle_dataset_op.cc:136] Shuffle buffer filled.
-Alpha: 0.00, Exp: 0, Sz: (4, 4), Step: 0/ 6720, D_loss: 0.69923, G_loss: 0.91889, Model size: 14
-Alpha: 0.02, Exp: 0, Sz: (4, 4), Step: 10/ 6720, D_loss: 0.50238, G_loss: 1.52228, Model size: 14
-Alpha: 0.04, Exp: 0, Sz: (4, 4), Step: 20/ 6720, D_loss: 0.51882, G_loss: 0.94966, Model size: 14
-Alpha: 0.06, Exp: 0, Sz: (4, 4), Step: 30/ 6720, D_loss: 0.38884, G_loss: 2.19388, Model size: 14
-Alpha: 0.08, Exp: 0, Sz: (4, 4), Step: 40/ 6720, D_loss: 0.47636, G_loss: 2.56428, Model size: 14
-Alpha: 0.10, Exp: 0, Sz: (4, 4), Step: 50/ 6720, D_loss: 0.47226, G_loss: 2.78979, Model size: 14
-Alpha: 0.13, Exp: 0, Sz: (4, 4), Step: 60/ 6720, D_loss: 0.24605, G_loss: 2.47885, Model size: 14
-...
-```
 
 ### Launching the server
 

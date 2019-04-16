@@ -35,6 +35,9 @@ class Track(object):
     tracking code, but can also be used to calculate further features such as
     the local density of neighbors.
 
+    Notes:
+        - Future expansion
+
     """
     def __init__(self, ID=None):
         self.ID = ID
@@ -45,6 +48,7 @@ class Track(object):
         self.length = None
         self.label = None
         self.parent = None
+        self.children = []
         self.fate = None
         self.cell_type = None
         self.neighborhood = []
@@ -64,7 +68,7 @@ class Track(object):
         if not self.in_frame(frame): return None
 
         # parameters to copy versus get when duplicating a track
-        to_copy = ['ID','length','parent','fate','cell_type']
+        to_copy = ['ID','length','parent','fate','cell_type','children']
         to_get = ['x','y','z','n','label']
         # to_get = [g for g in self.__dict__.keys() if g not in to_copy]
 
@@ -167,6 +171,7 @@ def write_XML(filename, tracks):
         ET.SubElement(txml, "n").text = str([int(t) for t in trk.n])
         ET.SubElement(txml, "class").text = str([l for l in trk.label])
         ET.SubElement(txml, "parent").text = str(trk.parent)
+        ET.SubElement(txml, "children").text = str(trk.children)
 
 
         if trk.neighborhood:
