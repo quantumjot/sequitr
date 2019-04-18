@@ -121,7 +121,26 @@ def create_weightmaps(path,
 
 
 if __name__ == '__main__':
-    path = '/media/lowe-sn00/TrainingData/competition_fCNN/'
-    folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path,f))]
-    print folders
-    create_weightmaps(path, folders, w0=30.)
+    import argparse
+
+    DEFAULT_WORKDIR = "/media/lowe-sn00/TrainingData/"
+
+    p = argparse.ArgumentParser(description='Sequitr: weightmap calculation')
+    p.add_argument('-p','--workdir', default=DEFAULT_WORKDIR,
+                    help='Path to the image data')
+    p.add_argument('-f', '--folders', nargs='+', required=True,
+                    help='Specify the sub-folders of image data')
+    p.add_argument('--w0', type=float, default=30.,
+                    help='Specify the amplitude')
+    p.add_argument('--sigma', type=float, default=3.,
+                    help='Specify the sigma')
+
+
+    args = p.parse_args()
+
+    print args
+
+    # path = '/media/lowe-sn00/TrainingData/competition_fCNN/'
+    # folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path,f))]
+    # print folders
+    create_weightmaps(args.workdir, args.folders, w0=args.w0, sigma=arg.sigma)

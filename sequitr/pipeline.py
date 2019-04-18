@@ -580,6 +580,7 @@ class ImageWeightMap2(ImagePipe):
 
 
 if __name__ == '__main__':
+    pass
     # p = ImagePipeline([ImageNorm(), ImageMaskEdge(), ImageFlip()])
     # p.save('/home/arl/Documents/Pipe.test.json')
     # p.load('/home/arl/Documents/Pipe.test.json')
