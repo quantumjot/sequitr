@@ -57,7 +57,7 @@ class LineageTreeNode(object):
                  root=False):
 
         assert(isinstance(root, bool))
-        assert(depth>0)
+        assert(depth>=0)
 
         self.root = root
         self.left = None
