@@ -28,10 +28,38 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as PathEffects
 
 
-class Node(object):
-    """ Node object to store tree structure and underlying track data """
-    def __init__(self, track=None, depth=0):
-        self.root = True
+class LineageTreeNode(object):
+    """ LineageTreeNode
+
+    Node object to store tree structure and underlying track data
+
+    Args:
+        track: the Track object
+        depth: depth of the node in the binary tree (should be > parent)
+        root: is this the root node?
+
+    Properties:
+        left: pointer to left node
+        right: pointer to right node
+        leaf: returns whether this is also a leaf node (no children)
+        children: returns the left and right nodes together
+        ID: returns the track ID
+        start: start time
+        end: end time
+
+    Notes:
+
+
+    """
+    def __init__(self,
+                 track=None,
+                 depth=0,
+                 root=False):
+
+        assert(isinstance(root, bool))
+        assert(depth>0)
+
+        self.root = root
         self.left = None
         self.right = None
         self.track = track
@@ -59,6 +87,7 @@ class Node(object):
     @property
     def end(self):
         return self.track.t[-1]
+
 
 
 
@@ -108,8 +137,10 @@ class LineageTree(object):
 
                 # TODO(arl): confirm that this is a root node, i.e. the parent
                 # ID should be the same as the track ID or None
+                if trk.ID != trk.parent and trk.parent is not None:
+                    raise Exception
 
-                root = Node(track=trk)
+                root = LineageTreeNode(track=trk, root=True)
                 used.append(trk)
 
                 if trk.children:
@@ -125,8 +156,9 @@ class LineageTree(object):
                             right_track = self.get_track_by_ID(children[1])
 
                             # set the children of the current node
-                            q.left = Node(track=left_track, depth=q.depth+1)
-                            q.right = Node(track=right_track, depth=q.depth+1)
+                            d = q.depth + 1 # next level from parent
+                            q.left = LineageTreeNode(track=left_track, depth=d)
+                            q.right = LineageTreeNode(track=right_track, depth=d)
 
                             # append the left and right children to the queue
                             queue.append(q.left)

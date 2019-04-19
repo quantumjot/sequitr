@@ -143,4 +143,4 @@ if __name__ == '__main__':
     # path = '/media/lowe-sn00/TrainingData/competition_fCNN/'
     # folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path,f))]
     # print folders
-    create_weightmaps(args.workdir, args.folders, w0=args.w0, sigma=arg.sigma)
+    create_weightmaps(args.workdir, args.folders, w0=args.w0, sigma=args.sigma)
