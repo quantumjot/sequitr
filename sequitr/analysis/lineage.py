@@ -141,7 +141,7 @@ def export_tree_to_json(tree, filename):
 
     import json
     with open(filename, 'w') as json_file:
-        json.dumps(json_file, tree)
+        json.dump(tree, json_file, indent=2, separators=(',', ': '))
 
 
 
