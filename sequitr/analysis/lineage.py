@@ -88,6 +88,61 @@ class LineageTreeNode(object):
     def end(self):
         return self.track.t[-1]
 
+    def to_dict(self):
+        """ convert the whole tree (from this node onward) to a dictionary """
+        return tree_to_dict(self)
+
+
+
+def tree_to_dict(root):
+    """ tree_to_dict
+
+    Convert a tree to a JSON compatible dictionary.  Traverses the tree and
+    returns a dictionary structure which can be output as a JSON file.
+
+    Recursive implementation, hopefully there are no loops!
+
+    The JSON representation should look like this:
+
+    {
+      "name": 1,
+      "children": [
+        {
+          "name": 2
+        },
+        {
+          "name": 3
+        }
+      ]
+    }
+
+    Args:
+        root: a root LineageTreeNode
+
+    Returns:
+        a dictionary representation of the tree.
+
+    """
+
+    assert(isinstance(root, LineageTreeNode))
+    tree = {"name": int(root.ID)}
+    if root.children:
+        tree["children"] = [tree_to_dict(root.left),tree_to_dict(root.right)]
+    return tree
+
+
+
+def export_tree_to_json(tree, filename):
+    """ export a tree to JSON format for visualisation """
+
+    #TODO(arl): proper type checking here
+    assert(isinstance(tree, dict))
+    assert(isinstance(filename, basestring))
+
+    import json
+    with open(filename, 'w') as json_file:
+        json.dumps(json_file, tree)
+
 
 
 

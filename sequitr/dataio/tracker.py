@@ -110,6 +110,7 @@ def read_XML(filename, cell_type=None):
     """ Load tracks from an sequitr XML file """
 
     if filename is None:
+        print "Warning - no filename specified in read_XML"
         return []
 
     if not isinstance(filename, basestring):
