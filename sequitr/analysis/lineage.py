@@ -105,13 +105,13 @@ def tree_to_dict(root):
     The JSON representation should look like this:
 
     {
-      "name": 1,
+      "name": "1",
       "children": [
         {
-          "name": 2
+          "name": "2"
         },
         {
-          "name": 3
+          "name": "3"
         }
       ]
     }
@@ -125,7 +125,12 @@ def tree_to_dict(root):
     """
 
     assert(isinstance(root, LineageTreeNode))
-    tree = {"name": int(root.ID)}
+    tree = {"name": str(int(root.ID))}
+
+    # fields = ['x','y','t','cell_type','fate','label']
+    # for f in fields:
+    #     tree[f] = get_attr(root.track, f)
+
     if root.children:
         tree["children"] = [tree_to_dict(root.left),tree_to_dict(root.right)]
     return tree
