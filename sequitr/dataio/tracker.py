@@ -114,7 +114,7 @@ class Track(object):
         T = Track()
         for k in params.keys():
             setattr(T, k, params[k])
-        # raise NotImplementedError
+        return T
 
 
 

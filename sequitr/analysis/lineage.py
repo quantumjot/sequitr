@@ -25,6 +25,8 @@ FATE_APOPTOSIS = 5
 import os
 import json
 
+from collections import OrderedDict
+
 from dataio import tracker
 from utils import check_and_makedir
 
@@ -132,8 +134,7 @@ def tree_to_dict(root):
 
     """
     assert(isinstance(root, LineageTreeNode))
-    tree = {"name": str(int(root.ID)),
-            "filename": root.filename}
+    tree = {"name": str(int(root.ID))}
     if root.children:
         tree["children"] = [tree_to_dict(root.left),tree_to_dict(root.right)]
     return tree
@@ -151,13 +152,33 @@ def export_tree_to_json(tree, filename):
         json.dump(tree, json_file, indent=2, separators=(',', ': '))
 
 
-def create_and_export_trees_to_json(export_dir, cell_type):
-    """ create trees from tracks and export a single tree file """
-    lineage_tree = LineageTree.from_json(json_file)
-    lineage_tree.create()
-    json_trees = [tree_to_dict(t) for t in lineage_tree.tree]
+def create_and_export_trees_to_json(export_dir,
+                                    cell_type,
+                                    ignore_single_tracks=True):
+    """ create trees from tracks and export a single tree file
 
-    raise NotImplementedError
+    Args:
+        export_dir: the directory with the json track files, also where trees
+            will be saved
+        cell_type: a cell type, e.g. 'GFP'
+        ignore_single_tracks: ignore non-trees when exporting
+
+    """
+
+    # set the correct trees filename
+    trees_file = os.path.join(export_dir, "trees_{}.json".format(cell_type))
+
+    lineage_tree = LineageTree.from_json(export_dir, cell_type)
+    lineage_tree.create()
+    json_trees = [tree_to_dict(t) for t in lineage_tree.trees]
+
+    if ignore_single_tracks:
+        json_trees = [t for t in json_trees if 'children' in t.keys()]
+
+    # now write out the trees
+    with open(trees_file, 'w') as json_file:
+        json.dump(json_trees, json_file, indent=2, separators=(',', ': '))
+
 
 
 
@@ -212,8 +233,9 @@ class LineageTree(object):
 
                 # TODO(arl): confirm that this is a root node, i.e. the parent
                 # ID should be the same as the track ID or None
-                if trk.ID != trk.parent and trk.parent is not None:
+                if trk.ID != trk.parent and trk.parent not in (0, None):
                     print "Error with trk {}".format(trk.ID)
+                    print trk.ID, trk.parent
 
                 root = LineageTreeNode(track=trk, root=True)
                 used.append(trk)
