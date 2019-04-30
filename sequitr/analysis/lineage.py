@@ -127,9 +127,9 @@ def tree_to_dict(root):
     assert(isinstance(root, LineageTreeNode))
     tree = {"name": str(int(root.ID))}
 
-    # fields = ['x','y','t','cell_type','fate','label']
-    # for f in fields:
-    #     tree[f] = get_attr(root.track, f)
+    # metadata = ['x','y','t','cell_type','fate','label']
+    # for m in metadata:
+    #     tree[m] = getattr(root.track, m)
 
     if root.children:
         tree["children"] = [tree_to_dict(root.left),tree_to_dict(root.right)]
@@ -147,6 +147,15 @@ def export_tree_to_json(tree, filename):
     import json
     with open(filename, 'w') as json_file:
         json.dump(tree, json_file, indent=2, separators=(',', ': '))
+
+
+def export_all_trees(trees, export_dir):
+    """ export all trees """
+    for tree in trees:
+        tree_fn = "tree_{}_{}.json"
+        export_tree_to_json(tree, os.path.join(export_dir, tree_fn))
+
+    # finally write a file with the outputs
 
 
 
@@ -244,7 +253,7 @@ class LineageTree(object):
     def from_xml(filename, cell_type=None):
         """ create a lineage tree from an XML file """
         tracks = tracker.read_XML(filename, cell_type=cell_type)
-        return self(tracks)
+        return LineageTree(tracks)
 
 
 
