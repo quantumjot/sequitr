@@ -22,7 +22,11 @@ __email__ = "a.lowe@ucl.ac.uk"
 
 FATE_APOPTOSIS = 5
 
+import os
+import json
+
 from dataio import tracker
+from utils import check_and_makedir
 
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as PathEffects
@@ -53,8 +57,8 @@ class LineageTreeNode(object):
     """
     def __init__(self,
                  track=None,
-                 depth=0,
-                 root=False):
+                 root=False,
+                 depth=0):
 
         assert(isinstance(root, bool))
         assert(depth>=0)
@@ -82,15 +86,19 @@ class LineageTreeNode(object):
 
     @property
     def start(self):
-        return self.track.n[0]
+        return self.track.t[0]
 
     @property
     def end(self):
-        return self.track.n[-1]
+        return self.track.t[-1]
 
     def to_dict(self):
         """ convert the whole tree (from this node onward) to a dictionary """
         return tree_to_dict(self)
+
+    @property
+    def filename(self):
+        return self.track.filename
 
 
 
@@ -123,14 +131,9 @@ def tree_to_dict(root):
         a dictionary representation of the tree.
 
     """
-
     assert(isinstance(root, LineageTreeNode))
-    tree = {"name": str(int(root.ID))}
-
-    # metadata = ['x','y','t','cell_type','fate','label']
-    # for m in metadata:
-    #     tree[m] = getattr(root.track, m)
-
+    tree = {"name": str(int(root.ID)),
+            "filename": root.filename}
     if root.children:
         tree["children"] = [tree_to_dict(root.left),tree_to_dict(root.right)]
     return tree
@@ -144,18 +147,21 @@ def export_tree_to_json(tree, filename):
     assert(isinstance(tree, dict))
     assert(isinstance(filename, basestring))
 
-    import json
     with open(filename, 'w') as json_file:
         json.dump(tree, json_file, indent=2, separators=(',', ': '))
 
 
-def export_all_trees(trees, export_dir):
-    """ export all trees """
-    for tree in trees:
-        tree_fn = "tree_{}_{}.json"
-        export_tree_to_json(tree, os.path.join(export_dir, tree_fn))
+def create_and_export_trees_to_json(export_dir, cell_type):
+    """ create trees from tracks and export a single tree file """
+    lineage_tree = LineageTree.from_json(json_file)
+    lineage_tree.create()
+    json_trees = [tree_to_dict(t) for t in lineage_tree.tree]
 
-    # finally write a file with the outputs
+    raise NotImplementedError
+
+
+
+
 
 
 
@@ -188,7 +194,7 @@ class LineageTree(object):
             raise TypeError('Tracks should be of type Track')
 
         # sort the tracks by the starting frame
-        self.tracks = sorted(tracks, key=lambda trk:trk.n[0], reverse=False)
+        self.tracks = sorted(tracks, key=lambda trk:trk.t[0], reverse=False)
 
     def get_track_by_ID(self, ID):
         """ return the track object with the corresponding ID """
@@ -253,6 +259,12 @@ class LineageTree(object):
     def from_xml(filename, cell_type=None):
         """ create a lineage tree from an XML file """
         tracks = tracker.read_XML(filename, cell_type=cell_type)
+        return LineageTree(tracks)
+
+    @staticmethod
+    def from_json(tracks_dir, cell_type=None):
+        """ create a lineage tree from an XML file """
+        tracks = tracker.read_JSON(tracks_dir, cell_type)
         return LineageTree(tracks)
 
 

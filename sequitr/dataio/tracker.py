@@ -22,8 +22,9 @@ __email__ = 'code@arlowe.co.uk'
 
 import os
 import ast
+import json
 import xml.etree.cElementTree as ET
-
+from collections import OrderedDict
 
 
 
@@ -44,7 +45,7 @@ class Track(object):
         self.x = None
         self.y = None
         self.z = None
-        self.n = None
+        self.t = None
         self.length = None
         self.label = None
         self.parent = None
@@ -52,11 +53,15 @@ class Track(object):
         self.fate = None
         self.cell_type = None
         self.neighborhood = []
+        self.filename = None
+
+    @property
+    def n(self): return self.t
 
     def in_frame(self, frame):
         """ return a bool as to whether this track is present in a certain
         frame of the movie """
-        return (frame in self.n)
+        return (frame in self.t)
 
     def __len__(self):
         return self.length
@@ -69,7 +74,7 @@ class Track(object):
 
         # parameters to copy versus get when duplicating a track
         to_copy = ['ID','length','parent','fate','cell_type','children']
-        to_get = ['x','y','z','n','label']
+        to_get = ['x','y','z','t','label']
         # to_get = [g for g in self.__dict__.keys() if g not in to_copy]
 
         # now duplicate the track, but only return the values at a certain
@@ -103,6 +108,50 @@ class Track(object):
                 return self.get_neighborhood_attr(attr)
 
         return None
+
+    @staticmethod
+    def from_dict(params):
+        T = Track()
+        for k in params.keys():
+            setattr(T, k, params[k])
+        # raise NotImplementedError
+
+
+
+
+
+def read_JSON(folder, cell_type):
+    """ read tracks in JSON format
+
+        tracks_<cell_type>.json is organized as follows:
+
+        "<cell_type>":
+            "files": [track_1_<cell_type>.json], ...],
+            "path": <path>
+
+        Each track.json file is the actual track data, which can be inserted
+        into the Track object.
+
+    """
+
+    file_stats_fn = os.path.join(folder, "tracks_{}.json".format(cell_type))
+    if not os.path.exists(file_stats_fn):
+        raise IOError('Tracking data file not found: {}'.format(file_stats_fn))
+
+    with open(file_stats_fn, 'r') as json_file:
+        track_files = json.load(json_file)
+
+    tracks = []
+    # iterate over the track files and create Track objects
+    for track_fn in track_files[cell_type]['files']:
+        with open(os.path.join(folder, track_fn), 'r') as track_file:
+            d = json.load(track_file)
+            d['cell_type'] = cell_type
+            d['filename'] = track_fn
+            tracks.append(Track.from_dict(d))
+
+    return tracks
+
 
 
 
@@ -189,4 +238,4 @@ def write_XML(filename, tracks):
 
 
 if __name__ == "__main__":
-    pass
+    read_JSON('/home/arl/Documents/test_json', 'GFP')
