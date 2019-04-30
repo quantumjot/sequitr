@@ -82,11 +82,11 @@ class LineageTreeNode(object):
 
     @property
     def start(self):
-        return self.track.t[0]
+        return self.track.n[0]
 
     @property
     def end(self):
-        return self.track.t[-1]
+        return self.track.n[-1]
 
     def to_dict(self):
         """ convert the whole tree (from this node onward) to a dictionary """
@@ -188,7 +188,7 @@ class LineageTree(object):
             raise TypeError('Tracks should be of type Track')
 
         # sort the tracks by the starting frame
-        self.tracks = sorted(tracks, key=lambda trk:trk.t[0], reverse=False)
+        self.tracks = sorted(tracks, key=lambda trk:trk.n[0], reverse=False)
 
     def get_track_by_ID(self, ID):
         """ return the track object with the corresponding ID """
@@ -207,7 +207,7 @@ class LineageTree(object):
                 # TODO(arl): confirm that this is a root node, i.e. the parent
                 # ID should be the same as the track ID or None
                 if trk.ID != trk.parent and trk.parent is not None:
-                    raise Exception
+                    print "Error with trk {}".format(trk.ID)
 
                 root = LineageTreeNode(track=trk, root=True)
                 used.append(trk)
