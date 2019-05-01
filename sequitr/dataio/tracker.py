@@ -23,6 +23,7 @@ __email__ = 'code@arlowe.co.uk'
 import os
 import ast
 import json
+import zipfile
 import xml.etree.cElementTree as ET
 from collections import OrderedDict
 
@@ -141,7 +142,22 @@ def read_JSON(folder, cell_type):
     with open(file_stats_fn, 'r') as json_file:
         track_files = json.load(json_file)
 
+
     tracks = []
+
+    # check to see whether this is a zipped file
+    as_zipped = track_files[cell_type]['zipped']
+    if as_zipped:
+        zip_fn = os.path.join(folder,"tracks_{}.zip".format(cell_type))
+        with zipfile.ZipFile(zip_fn, 'r') as zipped_tracks:
+            for track_fn in track_files[cell_type]['files']:
+                track_file = zipped_tracks.read(track_fn)
+                d = json.loads(track_file)
+                d['cell_type'] = cell_type
+                d['filename'] = track_fn
+                tracks.append(Track.from_dict(d))
+        return tracks
+
     # iterate over the track files and create Track objects
     for track_fn in track_files[cell_type]['files']:
         with open(os.path.join(folder, track_fn), 'r') as track_file:
