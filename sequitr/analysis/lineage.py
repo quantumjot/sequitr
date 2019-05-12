@@ -133,11 +133,19 @@ def tree_to_dict(root):
         a dictionary representation of the tree.
 
     """
+
+    tree = []
+
     assert(isinstance(root, LineageTreeNode))
-    tree = {"name": str(int(root.ID))}
+    # tree = {"name": str(int(root.ID))}
+    tree.append(("name", str(int(root.ID))))
+    tree.append(("start", root.start))
+    tree.append(("end", root.end))
     if root.children:
-        tree["children"] = [tree_to_dict(root.left),tree_to_dict(root.right)]
-    return tree
+        # tree["children"] = [tree_to_dict(root.left),tree_to_dict(root.right)]
+        tree.append(("children", [tree_to_dict(root.left),tree_to_dict(root.right)]))
+    # return tree
+    return OrderedDict(tree)
 
 
 

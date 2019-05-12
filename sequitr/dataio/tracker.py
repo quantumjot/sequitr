@@ -142,7 +142,6 @@ def read_JSON(folder, cell_type):
     with open(file_stats_fn, 'r') as json_file:
         track_files = json.load(json_file)
 
-
     tracks = []
 
     # check to see whether this is a zipped file

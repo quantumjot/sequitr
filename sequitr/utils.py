@@ -102,26 +102,31 @@ def get_tfrecord_stats(filename):
 
 
 
-def filter_doubling(start_filters=8,
-                    num_layers=7,
-                    max_filters=4096,
-                    reverse=False):
-    """ Set up a sequence of filters, doubling at every level
+# def filter_doubling(start_filters=8,
+#                     num_layers=7,
+#                     max_filters=4096,
+#                     reverse=False):
+#     """ Set up a sequence of filters, doubling at every level
+#
+#     Args:
+#         start_filters:  (int) the number of filters in the first level
+#         num_layers:     (int) the number of layers/filters to generate
+#         max_filters:    (int) set an upper limit on the number of filters
+#         reverse:        (bool) reverse the sequence to descending
+#
+#     Returns:
+#         filters:        a list of filters, e.g. [4, 8, 16, 32, 64]
+#
+#     """
+#     f = [min(start_filters*(2**i), max_filters) for i in range(num_layers)]
+#     if reverse: f.reverse()
+#     return f
 
-    Args:
-        start_filters:  (int) the number of filters in the first level
-        num_layers:     (int) the number of layers/filters to generate
-        max_filters:    (int) set an upper limit on the number of filters
-        reverse:        (bool) reverse the sequence to descending
-
-    Returns:
-        filters:        a list of filters, e.g. [4, 8, 16, 32, 64]
-
-    """
-    f = [min(start_filters*(2**i), max_filters) for i in range(num_layers)]
-    if reverse: f.reverse()
-    return f
-
+def filter_doubling(**kwargs):
+    from networks.common import filter_doubling as fd
+    import warnings
+    warnings.warn('Use common.filter_doubling instead')
+    return fd(**kwargs)
 
 
 
@@ -284,7 +289,8 @@ class NetConfiguration(object):
         self.learning_rate = 0.01
         self.augment = True
         self.path = None
-        self.training_data = 'test.tfrecord'
+        self.training_data = 'train.tfrecord'
+        self.test_data = 'test.tfrecord'
         self.image_dict = {}
 
     @property
@@ -346,6 +352,12 @@ class NetConfiguration(object):
         if isinstance(self.training_data, list):
             return [os.path.join(self.path, f) for f in self.training_data]
         return os.path.join(self.path, self.training_data)
+
+    @property
+    def testing_data_file(self):
+        if isinstance(self.test_data, list):
+            return [os.path.join(self.path, f) for f in self.test_data]
+        return os.path.join(self.path, self.test_data)
 
     @classmethod
     def from_params(cls, params, preload_model=False):
@@ -481,7 +493,7 @@ class CentroidWriter(HDF5FileHandler):
                     the original image data. If the original image data is
                     provided, some image statistics are calculated.
 
-                    
+
 
     """
     def __init__(self, filename=None):
