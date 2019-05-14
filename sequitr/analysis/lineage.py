@@ -303,8 +303,7 @@ class LineageTree(object):
     @property
     def linear_trees(self):
         """ return each tree as a linear list of tracks """
-        for tree in self.trees:
-            linear_trees.append(linearise_tree(tree))
+        linear_trees =[linearise_tree(t) for t in self.trees]
         return linear_trees
 
 
