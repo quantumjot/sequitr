@@ -191,7 +191,22 @@ def create_and_export_trees_to_json(export_dir,
 
 
 
+def linearise_tree(root_node):
+    """ Linearise a tree, i.e. return a list of track objects in the
+    tree, but lose the heirarchy
 
+    Essentially the inverse of tree calculation. Useful for plotting.
+    """
+    assert(isinstance(root_node, LineageTreeNode))
+    queue = [root_node]
+    linear = []
+    while queue:
+        node = queue.pop(0)
+        linear.append(node)
+        if node.children:
+            queue.append(node.left)
+            queue.append(node.right)
+    return linear
 
 
 
@@ -284,6 +299,14 @@ class LineageTree(object):
         plotter = LineageTreePlotter()
         for t in self.trees:
             plotter.plot([t])
+
+    @property
+    def linear_trees(self):
+        """ return each tree as a linear list of tracks """
+        for tree in self.trees:
+            linear_trees.append(linearise_tree(tree))
+        return linear_trees
+
 
     @staticmethod
     def from_xml(filename, cell_type=None):
