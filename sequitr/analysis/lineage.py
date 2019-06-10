@@ -300,6 +300,7 @@ class LineageTree(object):
         for t in self.trees:
             plotter.plot([t])
 
+
     @property
     def linear_trees(self):
         """ return each tree as a linear list of tracks """

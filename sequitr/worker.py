@@ -158,8 +158,8 @@ class JobWrapper(object):
         self._lib_path = None
         self._module = None
         self._func = None
-        self._options = None
-        self._params = None
+        self._options = {}
+        self._params = {}
 
     @property
     def ID(self): return self._ID

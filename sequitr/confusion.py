@@ -52,9 +52,9 @@ def confusion_matrix(y_true, y_pred, labels=DEFAULT_LABELS, display=False):
 def plot_confusion_matrix(c,
                           labels=DEFAULT_LABELS,
                           scores=True,
-                          fmt='%.2f',
+                          fmt='%.3f',
                           save=None,
-                          normalise=False,
+                          normalise=True,
                           epsilon=1e-99):
     """ plot_confusion_matrix
 
@@ -85,27 +85,28 @@ def plot_confusion_matrix(c,
 
     # transpose the confusion matrix to have real on x, predictions on y
     c = c.T
-
-    if normalise:
-        c_norm = c / (c.astype(np.float).sum(axis=1, keepdims=True)+epsilon)
-    else:
-        c_norm = c.astype(np.int)
+    c_norm = c / (c.astype(np.float).sum(axis=0, keepdims=True)+epsilon)
 
     fig, ax = plt.subplots(figsize=(10,6))
     heatmap = ax.pcolor(c_norm, cmap=plt.cm.viridis, vmin=0., vmax=1.)
 
+    counts = np.ravel(c).astype(np.int)
+
     if scores:
         # plot the stats in the cells
         heatmap.update_scalarmappable()
-        for p, color, value in izip(heatmap.get_paths(),
-                                    heatmap.get_facecolors(),
-                                    heatmap.get_array()):
+        for p, color, count, acc in izip(heatmap.get_paths(),
+                                          heatmap.get_facecolors(),
+                                          counts,
+                                          heatmap.get_array()):
             x, y = p.vertices[:-2, :].mean(0)
             if np.all(color[:2] > 0.5):
                 color = (0.0, 0.0, 0.0)
             else:
                 color = (1.0, 1.0, 1.0)
-            ax.text(x, y, fmt % value, ha="center", va="center", color=color)
+
+            txt = "{0:d} \n ({1:.3f})".format(count, acc)
+            ax.text(x, y, txt, ha="center", va="center", color=color)
 
     # put the major ticks at the middle of each cell
     ax.set_xticks(np.arange(c_norm.shape[0])+0.5, minor=False)
@@ -120,7 +121,7 @@ def plot_confusion_matrix(c,
 
     plt.xlabel(r'Ground truth')
     plt.ylabel(r'Prediction')
-    plt.title('Confusion matrix ({} examples)'.format(np.sum(c)))
+    plt.title('Confusion matrix ({0} examples)'.format(np.sum(confusion_matrix).astype(np.int)))
     plt.colorbar(heatmap).set_label('Normalised class accuracy')
 
     # Tweak spacing to prevent clipping of tick-labels
