@@ -28,6 +28,8 @@ import xml.etree.cElementTree as ET
 from collections import OrderedDict
 
 
+FATE_LABELS = ['null', 'initializing', 'terminating', 'link',
+     'mitosis', 'apoptosis', 'dead', 'merging', 'undefined']
 
 
 class Track(object):
@@ -66,6 +68,13 @@ class Track(object):
 
     def __len__(self):
         return self.length
+
+    @property
+    def fate_as_string(self):
+        if self.fate:
+            return FATE_LABELS[self.fate]
+        else:
+            return 'undefined'
 
     def get_copy_at_frame(self, frame):
         """ get a copy of the object at a specific frame. This is essentially
